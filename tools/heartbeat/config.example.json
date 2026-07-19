@@ -1,0 +1,26 @@
+{
+  "_note": "heartbeat 감시 대상 등록 예시. 실제 config.json은 로컬 전용(개인 잡 목록) — 커밋 금지. 새 주기잡을 만들면 여기(config.json)에 등록해야 heartbeat가 침묵실패를 잡는다.",
+  "jobs": [
+    {
+      "label": "com.example.daily-graph",
+      "name": "지식그래프 갱신(일)",
+      "artifact": "~/.local/share/example/graph.json",
+      "max_age_days": 2
+    },
+    {
+      "label": "com.example.weekly-scan",
+      "name": "주간 보안스캔(토)",
+      "artifact": null,
+      "max_age_days": 8,
+      "note": "artifact 없는 잡은 launchd exit코드만 신뢰"
+    }
+  ],
+  "shadows": [
+    {
+      "name": "예시-섀도로그",
+      "path": "~/.claude/tools/example/shadow.jsonl",
+      "stale_days": 7,
+      "note": "섀도 로그가 N일째 안 자라면 수집기 죽은 것 — 경고"
+    }
+  ]
+}

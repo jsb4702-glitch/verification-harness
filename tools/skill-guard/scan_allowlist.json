@@ -1,0 +1,10 @@
+{
+  "_note": "skill-guard 상시스캔 알려진 오탐. 알림/경고만 억제하고 shadow.jsonl 기록은 유지(감사추적 보존). 사람이 실검증 후에만 등재.",
+  "_verified": "2026-07-19 — 4건 전수 실검증: exfil 패턴 0건(ssh/id_rsa/curl|bash/base64 -d/printenv/aws creds 전부 미검출), 1층 skillscan 964파일 findings=0. 오탐 사유=외부 CLI 호출+자기 API키 사용 패턴이 env-exfil/ssh-key-exfil로 오분류.",
+  "known_fp": [
+    "agy",
+    "cdx",
+    "gemini-review",
+    "gemini-web-gem"
+  ]
+}

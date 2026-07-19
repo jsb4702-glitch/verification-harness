@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""memory_inbox 포인터 -> 세션 다이제스트 추출기 (결정론·무 LLM).
+
+memory_capture.py(SessionEnd/PreCompact 훅)가 적립한 포인터에서 트랜스크립트를 찾아,
+세션별 [첫 사용자 요청 발췌 + 마지막 어시스턴트 텍스트 꼬리]를 다이제스트로 뽑는다.
+주간 memory-compile 잡이 이 다이제스트만 읽고 영속가치 사실을 판정한다(토큰 절약).
+
+기계 필터: 실존 + 크기>=MIN_KB + 최신순 CAP개. 드롭 건수는 다이제스트 머리에 명시(침묵 절단 금지).
+성공 후 처리된 inbox 일파일은 memory_inbox/processed/ 로 이동(--archive).
+"""
+import os, re, json, sys, argparse, shutil
+
+INBOX = os.path.expanduser("~/.claude/memory_inbox")
+SR = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+
+def parse_pointers():
+    """미처리 inbox 일파일들 -> {transcript_path: 최신 event}, 소스 파일 목록"""
+    files, seen = [], {}
+    for f in sorted(os.listdir(INBOX)):
+        p = os.path.join(INBOX, f)
+        if not (f.endswith(".md") and os.path.isfile(p)):
+            continue
+        files.append(p)
+        for ln in open(p, encoding="utf-8", errors="replace"):
+            m = re.search(r"event=(\S+).*?transcript=(\S+)", ln)
+            if m and m.group(2).endswith(".jsonl"):
+                seen[m.group(2)] = m.group(1)
+    return seen, files
+
+def block_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+def digest_one(path, head_chars, tail_chars):
+    first_user, tails = None, []
+    try:
+        for ln in open(path, encoding="utf-8", errors="replace"):
+            try:
+                d = json.loads(ln)
+            except Exception:
+                continue
+            msg = d.get("message") or {}
+            role, t = msg.get("role"), d.get("type")
+            txt = block_text(msg.get("content"))
+            if not txt.strip():
+                continue
+            if first_user is None and (t == "user" or role == "user"):
+                clean = SR.sub("", txt).strip()
+                if clean:
+                    first_user = clean[:head_chars]
+            if t == "assistant" or role == "assistant":
+                tails.append(txt)
+    except Exception as e:
+        return None
+    if first_user is None and not tails:
+        return None
+    tail, budget = [], tail_chars
+    for txt in reversed(tails):          # 뒤에서부터 tail_chars 만큼
+        take = txt[-budget:]
+        tail.insert(0, take)
+        budget -= len(take)
+        if budget <= 0:
+            break
+    return first_user or "(첫 사용자 메시지 없음)", "\n".join(tail)
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--limit", type=int, default=15, help="세션 상한(최신 mtime순)")
+    ap.add_argument("--min-kb", type=int, default=20, help="트랜스크립트 최소 크기")
+    ap.add_argument("--head", type=int, default=300, help="첫 사용자 메시지 발췌 chars")
+    ap.add_argument("--tail", type=int, default=2500, help="어시스턴트 꼬리 chars")
+    ap.add_argument("--out", default="-", help="다이제스트 출력 경로(- = stdout)")
+    ap.add_argument("--archive", action="store_true",
+                    help="추출 후 inbox 일파일을 processed/ 로 이동")
+    a = ap.parse_args()
+
+    seen, files = parse_pointers()
+    alive = [(p, os.path.getmtime(p), os.path.getsize(p)) for p in seen
+             if os.path.exists(p)]
+    big = [x for x in alive if x[2] >= a.min_kb * 1024]
+    big.sort(key=lambda x: -x[1])
+    pick, dropped = big[:a.limit], len(big) - min(len(big), a.limit)
+
+    lines = [f"# 세션 다이제스트 ({len(pick)}건 추출 / 포인터 {len(seen)} / "
+             f"실존 {len(alive)} / {a.min_kb}KB 미만 제외 {len(alive)-len(big)} / "
+             f"상한 초과 드롭 {dropped})", ""]
+    for p, mt, size in pick:
+        d = digest_one(p, a.head, a.tail)
+        if not d:
+            continue
+        import datetime
+        ts = datetime.datetime.fromtimestamp(mt).strftime("%m-%d %H:%M")
+        lines += [f"## {os.path.basename(p)[:8]} ({ts}, {size//1024}KB)",
+                  f"[요청] {d[0]}", "[말미]", d[1], ""]
+    out = "\n".join(lines)
+    if a.out == "-":
+        print(out)
+    else:
+        with open(a.out, "w", encoding="utf-8") as f:
+            f.write(out)
+        print(f"digest -> {a.out} ({len(out)//1024}KB)")
+
+    if a.archive:
+        proc = os.path.join(INBOX, "processed")
+        os.makedirs(proc, exist_ok=True)
+        for f in files:
+            shutil.move(f, os.path.join(proc, os.path.basename(f)))
+        print(f"archived {len(files)} inbox files -> processed/")
+
+if __name__ == "__main__":
+    main()

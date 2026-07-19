@@ -1,0 +1,11 @@
+{
+ "created": "2026-01-01T00:00:00",
+ "servers": {
+  "~::example-server": {
+   "digest": "0000000000000000",
+   "pkg": "example-mcp==1.0.0",
+   "pinned": true
+  }
+ },
+ "_note": "MCP 서버 baseline 예시 — 실제 파일은 mcp-intake가 생성/갱신. 미등록 서버 추가 감지용."
+}

@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+*.jsonl
+venv/
+.venv/
+node_modules/
+.env
+.env.*
+*.pem
+*.key
+*.bak
+*.bak-*
+tools/heartbeat/config.json
+tools/heartbeat/state.json
+tools/heartbeat/reports/
