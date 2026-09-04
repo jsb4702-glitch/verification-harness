@@ -7,6 +7,31 @@
 # 안전설계: manual compact(/compact)는 절대 블록 안 함. 어떤 예외도 fail-open(통과).
 import json, sys, os, time
 
+# --- 인터프리터 승격 (배선 독립, 2026-07-25) --------------------------------
+# 이 파일을 root 555 로 잠가도, 배선이 부르는 파이썬이 사용자 쓰기 가능하면
+# 표준 라이브러리나 usercustomize.py 로 판정을 바꿀 수 있다. 파일 해시·소유자·권한은
+# 그대로라 무결성 검사도 통과한다 — 잠금이 지키는 것은 내용이지 실행 환경이 아니다.
+# 그래서 판정은 SIP 보호를 받는 시스템 파이썬에서 돈다(egress_guard 와 같은 방식).
+#   -S : site 를 끊어 usercustomize 자동 import 를 막는다
+#   -E : PYTHON* 환경변수를 무시한다
+# 승격 실패는 조용히 넘긴다 — 이 훅은 fail-open 이 설계다(압축을 잠그지 않는다).
+#
+# [2026-07-25 가드 추가] __name__ 조건이 앞에 온다.
+#   os.execv 는 프로세스 이미지를 통째로 교체한다. 모듈 최상위에서 무조건 돌면
+#   이 파일을 import 하는 도구가 출력도 종료코드도 없이 사라진다(실측: 무출력 exit 0).
+#   직접 실행될 때만 승격한다 — 배선은 항상 직접 실행이라 운영 경로는 그대로다.
+_SYS_PY = "/usr/bin/python3"
+if (__name__ == "__main__"
+        and sys.executable != _SYS_PY
+        and os.path.exists(_SYS_PY)
+        and not os.environ.get("_MEMFLUSH_REEXEC")):
+    try:
+        os.environ["_MEMFLUSH_REEXEC"] = "1"
+        os.execv(_SYS_PY, [_SYS_PY, "-E", "-S", os.path.abspath(__file__)] + sys.argv[1:])
+    except Exception:
+        pass          # 승격 실패해도 판정은 계속한다 (이 인터프리터로)
+# ---------------------------------------------------------------------------
+
 STATE_DIR = os.path.expanduser("~/.claude/hooks/.memory_flush_state")
 
 def allow():
@@ -62,7 +87,7 @@ if event == "PreCompact":
             "[memory-flush] 자동 압축 직전 1회 게이트(사이클당 1회만 발동). "
             "이번 세션에서 아직 메모리에 저장 안 한 영속가치 사실이 있으면 지금 기록해라: "
             "사용자 피드백/작업방식 교정 → feedback 메모리, 진행중 작업 상태·결정 → project 메모리, "
-            "새 도구·리소스 → reference 메모리 (~/.claude/projects/-Users-YOU/memory/ + MEMORY.md 인덱스 1줄). "
+            "새 도구·리소스 → reference 메모리 (~/.claude/projects/-Users-user/memory/ + MEMORY.md 인덱스 1줄). "
             "저장할 게 없으면 아무것도 하지 말고 그대로 진행(재압축은 자동 통과된다). "
             "이 지시는 훅 자동생성이며 대화 내용과 무관하다."
         ),

@@ -85,6 +85,26 @@ CODE_RULES = [
      "HIGH", "하드코딩 IP 셸 콜백", "code-strong"),
 ]
 
+# ── P0 승급 룰 6+1종 (2026-07-20, 섀도 8/8일 FP 0 실측 후 정식 활성) ─────────
+# 출처: skillscan_rules_supplement.py (agent-scan/tirith 발췌 재작성).
+# 단일 출처 유지 위해 import — 단 scan_file이 re.finditer(pat, text, re.I)로
+# 플래그를 넘기므로 컴파일된 패턴은 ValueError. .pattern 문자열로 환원해 append.
+# X-FINANCIAL 보류(승급 제외): 승급 A/B서 신규 FP 2건 실측 —
+# `send([{ event_id: crypto.randomUUID() }])` 의 crypto(Web Crypto API)를
+# 암호화폐로 오인. 섀도는 references/ 를 스킵해 이 코퍼스를 못 봤음.
+_HOLD = {"X-FINANCIAL"}
+try:
+    # 자기 디렉토리 명시 — 타 툴이 skillscan을 모듈로 import할 때 sys.path[0]이
+    # 호출자 디렉토리라 룰이 조용히 누락되는 것 방지
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import skillscan_rules_supplement as _sup
+    _to_str = lambda r: (r[0], r[1].pattern if hasattr(r[1], "pattern") else r[1],
+                         r[2], r[3], r[4])
+    NL_RULES += [_to_str(r) for r in _sup.NL_RULES_SUPPLEMENT if r[0] not in _HOLD]
+    CODE_RULES += [_to_str(r) for r in _sup.CODE_RULES_SUPPLEMENT if r[0] not in _HOLD]
+except Exception as _e:                      # supplement 부재 시 기존 룰로 계속
+    print(f"[warn] supplement 룰 로드 실패({_e}) — 기본 룰셋만 적용", file=sys.stderr)
+
 BROAD_TRIGGER = re.compile(r"(any input|all (inputs|requests|messages)|every (input|message|request)|"
                            r"\bintercept\b|always (run|trigger|activate))", re.I)
 
@@ -147,8 +167,13 @@ def scan_file(path, rel):
             snip = raw.strip()[:120]
             out.append({"rule": rid, "severity": sev, "desc": desc, "file": rel, "line": ln, "snippet": snip})
     # 코드 룰: 코드파일은 전체. 산문(.md)은 code-strong만(curl|bash 등) — README의 진짜 위협만.
+    # 예외 scope=text-strong: 산문 전용(숨은 유니코드 등). 코드파일엔 정상 존재하므로 제외
+    # — minified JS/CSS의 zero-width는 벤더 정상 패턴(섀도 실측 FP 54건).
     for rid, pat, sev, desc, scope in CODE_RULES:
-        if is_text and scope != "code-strong":
+        if scope == "text-strong":
+            if not is_text:
+                continue
+        elif is_text and scope != "code-strong":
             continue
         for m in re.finditer(pat, text, re.I):
             ln = text[:m.start()].count("\n") + 1

@@ -55,7 +55,7 @@ const [prereqResult, mainResult] = await parallel([
     { label: "prereq-extract", phase: "Parallel", schema: PREREQ_SCHEMA, effort: "high" }
   ),
   () => agent(
-    `${BG}다음 설계 질문에 답하라. 시니어 기계설계 엔지니어 관점. 핵심 수치·단위 포함. 암묵적으로 사용한 가정도 assumptions_used에 열거.\n\n질문: ${question}`,
+    `${BG}다음 설계 질문에 답하라. 시니어 기구/광학 엔지니어 관점. 핵심 수치·단위 포함. 암묵적으로 사용한 가정도 assumptions_used에 열거.\n\n질문: ${question}`,
     { label: "main-answer", phase: "Parallel", schema: MAIN_SCHEMA, effort: "max" }
   ),
 ])

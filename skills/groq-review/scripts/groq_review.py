@@ -29,6 +29,8 @@ SYSTEM_PROMPT = """You are an expert cross-validator. Critically review the prov
 - Unstated assumptions
 - Missing edge cases
 
+Only assert an error when you are more than 75% confident it is actually wrong - a false accusation costs three times more than staying silent. When uncertain, mark the point as "unverified" instead of asserting.
+
 Respond in the same language as the input. Be concise and direct. Flag specific issues with line references where possible."""
 
 

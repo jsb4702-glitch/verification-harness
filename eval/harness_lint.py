@@ -14,6 +14,7 @@ REQUIRED_GATES = {
     "G1": "등급", "G2": "확인필요", "G3": "web_search", "G4": "날조",
     "G5": None, "G6": "환각", "G7": "모순", "G8": "가정",
     "G9": "산술", "G10": "자기비판", "G11": "입력격리",
+    "G12": "출력대조", "G13": "재발방지",
 }
 # 절대게이트 섹션 핵심 문구
 REQUIRED_PHRASES = ["절대게이트", "신뢰도 등급", "EXECUTION LOOP", "VALIDATION GATE"]

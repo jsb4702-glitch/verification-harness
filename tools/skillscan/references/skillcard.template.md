@@ -33,7 +33,7 @@
 |------|-----|
 | Use case (용도) | {{USECASE}} |
 | Known risks & mitigations | {{RISKS}} |
-| **Export control** | {{EXPORT}}  ← 수출통제 규정 저촉 여부 ❓ |
+| **Export control (민감)** | {{EXPORT}}  ← 수출통제 규정/수출통제 규정 저촉 여부 ❓ |
 | Boundary / 경계 | {{BOUNDARY}}  (스킬이 건드리면 안 되는 것) |
 
 ## 5. Attribution

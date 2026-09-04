@@ -1,6 +1,6 @@
 ---
 name: agy
-description: Antigravity CLI(agy, Gemini 3.1 Pro)를 직접 호출해 질문에 답하거나 내 답변·계산을 교차검증한다. "agy", "agy한테 물어봐", "agy로", "/agy", "antigravity", "제미나이 프로로 검증" 요청 시 호출. 기본=질의모드, "검증/크로스체크/이거 맞나/review/second opinion" 의도면 검증모드. 민감데이터 투입 금지.
+description: Antigravity CLI(agy, Gemini 3.1 Pro)를 직접 호출해 질문에 답하거나 내 답변·계산을 교차검증한다. "agy", "agy한테 물어봐", "agy로", "/agy", "antigravity", "제미나이 프로로 검증" 요청 시 호출. 기본=질의모드, "검증/크로스체크/이거 맞나/review/second opinion" 의도면 검증모드. 사내기밀·민감 데이터 투입 금지.
 ---
 
 # agy 직접 호출 스킬 (Gemini 3.1 Pro / Antigravity CLI)
@@ -26,4 +26,5 @@ description: Antigravity CLI(agy, Gemini 3.1 Pro)를 직접 호출해 질문에 
 - 인증: 시스템 키링 OAuth (API키 env 미지원, v1.0.16 실측). 미인증이면 스크립트가 ERROR로 즉시 노출(추측 채움 안 함).
 - 모델: `~/.claude/config/agy_model.txt` 단일소스 (현재 Gemini 3.1 Pro (High)). `AGY_MODEL` env로 오버라이드.
 - G11: `--sandbox`로 실행 — 검토대상 내 지시문의 툴실행 승격 차단(스크립트 내장, 두 모드 공통).
+- 직역 금지 STYLE_RULE(사용자 지정 26-09-01)이 두 모드 공통 프롬프트 선두에 자동 주입된다 — `--raw`도 완전 순수전달 아님. E2E 수신 확인 26-09-01.
 - 이 스킬은 parallel-verify 워크플로가 참조하는 검증경로를 건드리지 않는다(질의는 `--raw` 순수추가).

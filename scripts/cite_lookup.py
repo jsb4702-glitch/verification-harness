@@ -7,7 +7,7 @@ G4 "조회 강제": 기억·추정 금지, 공개 API 실호출 결과만 반환
 주의: claimed 메타데이터와의 '불일치(mismatch)' 판정은 호출측(에이전트)이 found와 대조해 수행.
 텔레메트리: 매 조회를 TELEMETRY(JSONL)에 append — type·status·지연·ts. 평가검증용(cite_lookup_report.py).
 """
-import sys, json, os, time, urllib.request, urllib.parse, urllib.error, re
+import sys, json, os, time, urllib.request, urllib.parse, urllib.error, re, html
 
 MAILTO = "you@example.com"  # Crossref polite pool
 TIMEOUT = 25
@@ -24,6 +24,12 @@ def fetch(url, headers=None):
     req = urllib.request.Request(url, headers=headers or {"User-Agent": f"cite-lookup/1.0 (mailto:{MAILTO})"})
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
         return r.read().decode("utf-8", "replace"), r.status
+
+
+def _person(a):
+    """Crossref author 객체 → 'Given Family' (기관저자는 name 필드)."""
+    n = " ".join(x for x in (a.get("given"), a.get("family")) if x).strip()
+    return n or a.get("name", "")
 
 
 def _doi_ra_fallback(doi):
@@ -67,11 +73,15 @@ def lookup_doi(value):
         title = (m.get("title") or ["(제목없음)"])[0]
         year = (m.get("published", {}).get("date-parts", [[None]]) or [[None]])[0][0]
         authors = m.get("author") or []
+        # 거짓반증 수리(2026-07-25 wf_69bfc458): 제1저자만 반환 → 공저자 대조 불가. 전체 목록 반환.
+        names = [n for n in (_person(a) for a in authors) if n]
         a1 = (authors[0].get("family", "") if authors else "")
         journal = (m.get("container-title") or [""])[0]
-        found = f"제목='{title}' / 저자1={a1} / 연도={year} / 저널={journal}"
+        disp = ", ".join(names[:8]) + (f" 외 {len(names) - 8}명" if len(names) > 8 else "")
+        found = f"제목='{title}' / 저자({len(names)})={disp or a1} / 연도={year} / 저널={journal}"
         return {"status": "confirmed", "found": found, "source": "api.crossref.org",
-                "raw_title": title, "raw_year": year, "raw_author1": a1, "raw_journal": journal}
+                "raw_title": title, "raw_year": year, "raw_author1": a1,
+                "raw_authors": names, "raw_journal": journal}
     except Exception as e:
         return {"status": "unverified", "found": f"파싱실패: {e}", "source": "api.crossref.org"}
 
@@ -79,7 +89,8 @@ def lookup_doi(value):
 def lookup_arxiv(value):
     aid = value.strip().replace("arXiv:", "").replace("arxiv:", "")
     aid = re.sub(r"^https?://arxiv\.org/abs/", "", aid)
-    url = f"http://export.arxiv.org/api/query?id_list={urllib.parse.quote(aid)}"
+    # https 강제 — http://는 환경 따라 빈 응답(2026-07-25 실측: curl 0B, https 200)
+    url = f"https://export.arxiv.org/api/query?id_list={urllib.parse.quote(aid)}"
     try:
         body, status = fetch(url)
     except Exception as e:
@@ -90,18 +101,32 @@ def lookup_arxiv(value):
     entry = re.search(r"<entry>(.*?)</entry>", body, re.S)
     if not entry:
         return {"status": "refuted", "found": "없음 (entry 부재)", "source": "export.arxiv.org"}
+    # 이하 파싱은 entry 스코프 고정 — feed 레벨 <updated>(쿼리시각) 오염 방지
     e = entry.group(1)
     title = re.search(r"<title>(.*?)</title>", e, re.S)
-    title = re.sub(r"\s+", " ", title.group(1)).strip() if title else "(제목없음)"
+    title = html.unescape(re.sub(r"\s+", " ", title.group(1)).strip()) if title else "(제목없음)"
     if title.lower().startswith("error"):
         return {"status": "refuted", "found": f"없음 (arXiv error: {title})", "source": "export.arxiv.org"}
     pub = re.search(r"<published>(\d{4})", e)
     year = pub.group(1) if pub else None
-    a1 = re.search(r"<author>\s*<name>(.*?)</name>", e, re.S)
-    a1 = a1.group(1).strip() if a1 else ""
-    found = f"제목='{title}' / 저자1={a1} / 연도={year}"
+    upd = re.search(r"<updated>(\d{4})", e)
+    year_upd = upd.group(1) if upd else None
+    # 거짓반증 수리(2026-07-25 wf_69bfc458): 제1저자만 반환 → "공저자가 목록에 없음" 오판(refuted).
+    # 전체 <author><name> 파싱 — 저자 대조는 이 전체 목록(raw_authors) 기준.
+    authors = [html.unescape(re.sub(r"\s+", " ", a).strip())
+               for a in re.findall(r"<author>\s*<name>(.*?)</name>", e, re.S)]
+    a1 = authors[0] if authors else ""
+    # 게재처 단서: arxiv:comment("... (ICLR 2025)" 등). 학회연도는 제출연도와 별개 축 —
+    # comment 부재 = 게재처 미확인이지 반증 아님(축별 판정은 호출측 규칙).
+    cm = re.search(r"<arxiv:comment[^>]*>(.*?)</arxiv:comment>", e, re.S)
+    comment = html.unescape(re.sub(r"\s+", " ", cm.group(1)).strip()) if cm else ""
+    disp = ", ".join(authors[:8]) + (f" 외 {len(authors) - 8}명" if len(authors) > 8 else "")
+    found = f"제목='{title}' / 저자({len(authors)})={disp} / 제출연도={year}(최근판 {year_upd})"
+    if comment:
+        found += f" / comment='{comment[:160]}'"
     return {"status": "confirmed", "found": found, "source": "export.arxiv.org",
-            "raw_title": title, "raw_year": year, "raw_author1": a1}
+            "raw_title": title, "raw_year": year, "raw_year_updated": year_upd,
+            "raw_author1": a1, "raw_authors": authors, "raw_comment": comment}
 
 
 def lookup_cve(value):

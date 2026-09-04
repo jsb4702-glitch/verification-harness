@@ -11,7 +11,7 @@ AUDIT = f"{HOME}/.claude/tools/skill-audit/skill-audit.py"
 WORK = pathlib.Path(f"{HOME}/skill-audit-weekly")
 QLOG = WORK / "quality-log.md"
 FIXT = WORK / "fixtures"
-NTFY_TOPIC = "YOUR_NTFY_TOPIC"   # ntfy.sh 알림 토픽 (본인 것으로 교체)
+NTFY_TOPIC = "YOUR_NTFY_TOPIC"   # 하네스 ntfy 토픽(26-07-25 로테이션)
 QUERIES = ["claude skill", "claude code skill agent", "mcp server skill",
            "claude agent skill", "ai skill toolkit"]
 MAX_CANDIDATES = 6

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""로컬 Hermes(gemma4-hermes) 교차검증 — gemini 슬롯 폴백용(오프라인·무료·민감데이터 로컬보존).
+"""로컬 Hermes(gemma4-hermes) 교차검증 — gemini 슬롯 폴백용(오프라인·무료·기밀데이터 로컬보존).
 
 parallel-verify.js 슬롯 규약: `python3 hermes_review.py <file>` → stdout에 비평.
 Hermes 강점=G4날조·산술·인과(검증기 평가 실측 recall 1.00/0.92/1.00),
@@ -11,10 +11,10 @@ import os
 import subprocess
 
 HERMES_BIN = os.path.expanduser("~/.local/bin/hermes")
-TIMEOUT = int(os.environ.get("HERMES_TIMEOUT", "240"))  # 건당 ~87s 실측 + 여유
+TIMEOUT = int(os.environ.get("HERMES_TIMEOUT", "420"))  # 실측 268.7s(2026-09-01, 9.6GB 콜드로드 포함) + 여유. 240s는 상시 미달이라 상향
 
 SYSTEM_PROMPT = """너는 독립 교차검증 엔지니어다. 아래 [검토대상]을 옳다고 가정하지 말고 처음부터 다시 따져라. 다음을 점검:
-- 사실오류·날조(풀PN·DOI·규격번호 등 존재하지 않을 법한 식별자)
+- 사실오류·날조(풀PN·DOI·규격번호·CAGE·NSN 등 존재하지 않을 법한 식별자)
 - 논리 비약·인과 오류
 - 산술·단위·환산 오류(중간값 재계산)
 - 명시 안 된 가정, 놓친 경계조건

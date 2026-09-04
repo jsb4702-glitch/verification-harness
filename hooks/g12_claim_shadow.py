@@ -50,14 +50,28 @@ def text_of(content):
                 out.append(b)
     return "\n".join(out)
 
+ASYNC_MARK = "<task-notification>"   # 백그라운드 Workflow/Task 완료 알림 (type=user·문자열이지만 사람 발화 아님)
+
+def is_async_notice(d):
+    c = d.get("message", {}).get("content")
+    if isinstance(c, str):
+        return ASYNC_MARK in c[:200]
+    if isinstance(c, list):
+        return any(isinstance(b, dict) and isinstance(b.get("text"), str)
+                   and ASYNC_MARK in b["text"][:200] for b in c)
+    return False
+
 def last_turn(rows):
+    # 턴 시작 = tool_result 아닌 사람 발화. 백그라운드 완료 알림(<task-notification>)은
+    # 도구 결과의 비동기 도착이라 턴을 자르지 않는다 — 자르면 직전 Workflow tool_use가
+    # 슬라이스 밖으로 밀려 tool_count 0 오탐(2026-08-15 사례, 31건 중 3건 같은 유형).
     start = 0
     for i, d in enumerate(rows):
         if d.get("type") == "user":
             c = d.get("message", {}).get("content")
             is_tr = isinstance(c, list) and any(
                 isinstance(b, dict) and b.get("type") == "tool_result" for b in c)
-            if not is_tr:
+            if not is_tr and not is_async_notice(d):
                 start = i
     return rows[start:]
 
@@ -74,6 +88,9 @@ def main():
 
     answer, model, tools = "", "", []
     for d in turn:
+        if d.get("type") == "user" and is_async_notice(d):
+            tools.append("async-task-result")   # 비동기 도구 결과 도착 = 대조 가능한 실행로그
+            continue
         if d.get("type") == "assistant":
             msg = d.get("message", {})
             m = msg.get("model")

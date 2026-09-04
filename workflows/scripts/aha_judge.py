@@ -33,7 +33,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("candidates")
     ap.add_argument("harness")
-    ap.add_argument("--engine", default="gemini", choices=["gemini", "agy"])
+    ap.add_argument("--engine", default="gemini", choices=["gemini", "agy", "cdx"])
     a = ap.parse_args()
 
     try:

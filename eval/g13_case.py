@@ -14,7 +14,11 @@ usage:
   # (b) 거동 케이스 (gate-level, promptfoo) -> ~/harness-eval/tests/harness_cases.yaml
   g13_case.py gate --desc "G4 xxx — ..." --query "던질 프롬프트" \
       --rubric "PASS=..., FAIL=..." [--not-contains "금지문자열"] \
+      [--js "output 판정식 → 1/0"] [--var compact_summary="압축요약 본문"] \
       --source "2026-07-02 세션: ..."
+      # --var KEY=TEXT : prompts/harness.js 가 읽는 추가 vars (반복 가능).
+      #   compact_summary = 압축 직후 continuation 턴 주입(2026-08-23, arXiv 2606.22528 대응)
+      # --js : 결정론 트립와이어(javascript assert). rubric 채점 노이즈와 독립.
 
   --dry-run : 파일에 안 쓰고 결과만 출력
 
@@ -37,6 +41,23 @@ VALID_LABELS = {"hallucination", "clean"}
 KNOWN_CATS = {"G4_fabrication", "G9_arithmetic", "material_property",
               "causal_logic", "context_misapply", "G11_injection"}
 
+# 실수 3분류 (2026-07-21, 3자 합의): 반복-회수실패 / 반복-집행실패 / 신규유형.
+# 근거 애매하면 unresolved — 억지 분류가 통계를 더 망친다(cdx 지적).
+# 10건 누적 후 `stats`로 분포 보고 다음 처방(트리거태그/선별훅/유지) 결정.
+VALID_FAILURE_CLASSES = {"recall", "enforcement", "novel", "unresolved"}
+
+
+def validate_failure_class(a):
+    errs = []
+    if a.failure_class not in VALID_FAILURE_CLASSES:
+        errs.append(f"--failure-class는 {sorted(VALID_FAILURE_CLASSES)} 중 하나")
+        return errs
+    if a.failure_class in ("recall", "enforcement") and not a.matched_lesson:
+        errs.append(f"'{a.failure_class}'(반복 실수)는 --matched-lesson(매칭된 기존 교훈 메모리 이름) 필수")
+    if a.failure_class == "novel" and a.matched_lesson:
+        errs.append("'novel'인데 --matched-lesson이 있다 — 기존 교훈과 매칭되면 recall/enforcement로 분류해라")
+    return errs
+
 
 def existing_gold_ids():
     ids = set()
@@ -53,7 +74,7 @@ def existing_gold_ids():
 
 
 def add_judge(a):
-    errs = []
+    errs = validate_failure_class(a)
     if a.label not in VALID_LABELS:
         errs.append(f"label은 {VALID_LABELS} 중 하나")
     if a.label == "hallucination" and not a.span:
@@ -75,10 +96,11 @@ def add_judge(a):
     line = json.dumps(rec, ensure_ascii=False)
     if a.dry_run:
         print(f"[dry-run] goldset.jsonl에 추가될 라인:\n{line}")
+        print(f"[dry-run] ledger 분류: failure_class={a.failure_class} matched_lesson={a.matched_lesson}")
         return 0
     with open(GOLD, "a", encoding="utf-8") as f:
         f.write(line + "\n")
-    ledger("judge", a.id, a.source, a.verifiable)
+    ledger("judge", a.id, a.source, a.verifiable, a.failure_class, a.matched_lesson)
     print(f"✅ goldset.jsonl에 박제: {a.id} ({a.category}/{a.label})")
     remind(a.label)
     return 0
@@ -90,7 +112,7 @@ def yaml_quote_block(text, indent):
 
 
 def add_gate(a):
-    errs = []
+    errs = validate_failure_class(a)
     if not a.rubric:
         errs.append("--rubric 필수 (PASS/FAIL 판정문) — 검증경로 없는 케이스 금지(G13)")
     if os.path.exists(CASES) and a.desc in open(CASES, encoding="utf-8").read():
@@ -100,36 +122,96 @@ def add_gate(a):
             print(f"❌ {e}")
         return 2
 
+    extra_vars = []
+    for kv in (a.var or []):
+        if "=" not in kv:
+            print(f"❌ --var 형식은 KEY=TEXT: {kv!r}")
+            return 2
+        k, v = kv.split("=", 1)
+        if not k.strip() or k.strip() == "query":
+            print(f"❌ --var 키 오류(빈 키 또는 query 예약어): {kv!r}")
+            return 2
+        extra_vars.append((k.strip(), v))
+
     stamp = time.strftime("%Y-%m-%d")
     block = [f"\n# --- G13 capture {stamp}: {a.source or '(source 미기재)'} ---",
              f'- description: "{a.desc}"',
              "  vars:",
              "    query: |",
-             yaml_quote_block(a.query, 6),
-             "  assert:"]
+             yaml_quote_block(a.query, 6)]
+    for k, v in extra_vars:
+        block += [f"    {k}: |", yaml_quote_block(v, 6)]
+    block += ["  assert:"]
     if a.not_contains:
         block += ["    - type: not-contains",
                   f'      value: "{a.not_contains}"']
+    if a.js:
+        block += ["    - type: javascript",
+                  "      value: |",
+                  yaml_quote_block(a.js, 8)]
     block += ["    - type: llm-rubric",
               "      value: >",
               yaml_quote_block(a.rubric, 8)]
     text = "\n".join(block) + "\n"
     if a.dry_run:
         print(f"[dry-run] harness_cases.yaml에 추가될 블록:\n{text}")
+        print(f"[dry-run] ledger 분류: failure_class={a.failure_class} matched_lesson={a.matched_lesson}")
         return 0
     with open(CASES, "a", encoding="utf-8") as f:
         f.write(text)
-    ledger("gate", a.desc, a.source, "llm-rubric" + ("+not-contains" if a.not_contains else ""))
+    ledger("gate", a.desc, a.source,
+           "llm-rubric" + ("+not-contains" if a.not_contains else "") + ("+js" if a.js else ""),
+           a.failure_class, a.matched_lesson)
     print(f"✅ harness_cases.yaml에 박제: {a.desc}")
     remind(None)
     return 0
 
 
-def ledger(kind, key, source, verifiable):
+def ledger(kind, key, source, verifiable, failure_class="unresolved", matched_lesson=None):
     rec = {"ts": time.strftime("%Y%m%d-%H%M"), "kind": kind, "key": key,
-           "source": source or "", "verifiable": verifiable}
+           "source": source or "", "verifiable": verifiable,
+           "failure_class": failure_class, "matched_lesson": matched_lesson}
     with open(LEDGER, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def stats(a):
+    # 분류 분포 집계 — 10건 누적이 다음 처방 판단 컷(통계 확정치 아님, 운영 임계값).
+    if not os.path.exists(LEDGER):
+        print("원장 없음:", LEDGER)
+        return 1
+    counts, lessons, legacy = {}, {}, 0
+    for l in open(LEDGER, encoding="utf-8"):
+        l = l.strip()
+        if not l:
+            continue
+        try:
+            rec = json.loads(l)
+        except json.JSONDecodeError:
+            continue
+        fc = rec.get("failure_class")
+        if fc is None:
+            legacy += 1  # 분류 필드 도입(2026-07-21) 이전 레코드
+            continue
+        counts[fc] = counts.get(fc, 0) + 1
+        ml = rec.get("matched_lesson")
+        if ml:
+            lessons[ml] = lessons.get(ml, 0) + 1
+    total = sum(counts.values())
+    print(f"분류 레코드 {total}건 (미분류 legacy {legacy}건 제외)")
+    for fc in ("recall", "enforcement", "novel", "unresolved"):
+        n = counts.get(fc, 0)
+        pct = f" ({n/total*100:.0f}%)" if total else ""
+        print(f"  {fc:12s} {n}건{pct}")
+    if lessons:
+        print("반복 매칭된 교훈 (재발 핫스팟):")
+        for ml, n in sorted(lessons.items(), key=lambda x: -x[1]):
+            print(f"  {n}× {ml}")
+    if total >= 10:
+        print("\n✅ 10건 도달 — 분포 보고 다음 처방 결정 시점 (recall 우세=인덱스 트리거태그 / enforcement 우세=선별 훅 기계화 / novel 우세=현행 유지)")
+    else:
+        print(f"\n{10 - total}건 더 쌓이면 처방 판단 시점")
+    return 0
 
 
 def remind(label):
@@ -154,6 +236,10 @@ def main():
     j.add_argument("--why", required=True)
     j.add_argument("--verifiable", required=True)
     j.add_argument("--source", default=None)
+    j.add_argument("--failure-class", default="unresolved",
+                   help="recall(반복-회수실패)/enforcement(반복-집행실패)/novel(신규)/unresolved(애매)")
+    j.add_argument("--matched-lesson", default=None,
+                   help="반복 실수면 매칭된 기존 교훈 메모리 이름 (예: feedback-verify-live-not-stale-dump)")
     j.add_argument("--dry-run", action="store_true")
 
     g = sub.add_parser("gate", help="gate-level promptfoo 케이스 -> harness_cases.yaml")
@@ -161,10 +247,22 @@ def main():
     g.add_argument("--query", required=True)
     g.add_argument("--rubric", required=True)
     g.add_argument("--not-contains", default=None)
+    g.add_argument("--js", default=None,
+                   help="javascript assert 식(결정론 트립와이어). output 변수 사용, 1=PASS 0=FAIL")
+    g.add_argument("--var", action="append", default=None,
+                   help="추가 vars KEY=TEXT (반복 가능). 예: compact_summary=... → 압축 continuation 턴 주입")
     g.add_argument("--source", default=None)
+    g.add_argument("--failure-class", default="unresolved",
+                   help="recall(반복-회수실패)/enforcement(반복-집행실패)/novel(신규)/unresolved(애매)")
+    g.add_argument("--matched-lesson", default=None,
+                   help="반복 실수면 매칭된 기존 교훈 메모리 이름")
     g.add_argument("--dry-run", action="store_true")
 
+    s = sub.add_parser("stats", help="실수 3분류 분포 집계 (10건=처방 판단 컷)")
+
     a = ap.parse_args()
+    if a.cmd == "stats":
+        return stats(a)
     return add_judge(a) if a.cmd == "judge" else add_gate(a)
 
 

@@ -1,0 +1,165 @@
+{
+ "nodes": [
+  {
+   "id": "usage",
+   "type": "text",
+   "text": "사용법 (첫 줄이 # 가 아니라 컴파일에 안 잡힘)\n1. 팔레트 노드 복제 → 값 수정 → 와이어로 엮기 (상류 결과가 하류 컨텍스트)\n2. 마지막은 #플로우 싱크로 모아라 (미배선 노드는 무시·경고)\n3. 클로드한테: \"이 플로우 캔버스 돌려줘\" — 위상 순서로 스킬 실행,\n   노드별 결과가 #결과 로 붙는다. #게이트 에선 멈추고 물어본다\n규칙: 첫 줄 #타입 단독 · #스킬 둘째 줄 '스킬: 이름' · 셋째 줄부터 지시 · 순환 금지",
+   "x": -900,
+   "y": -400,
+   "width": 620,
+   "height": 230
+  },
+  {
+   "id": "grp_pal",
+   "type": "group",
+   "label": "팔레트 — 복제해서 쓰기",
+   "x": -940,
+   "y": -120,
+   "width": 680,
+   "height": 640
+  },
+  {
+   "id": "p_dat",
+   "type": "text",
+   "text": "#자료\n(둘째 줄부터 자유 텍스트 —\n파일 경로·수치·조건)",
+   "x": -900,
+   "y": -80,
+   "width": 300,
+   "height": 180,
+   "color": "5"
+  },
+  {
+   "id": "p_skl",
+   "type": "text",
+   "text": "#스킬\n스킬: vdi2230\n(셋째 줄부터 이 스킬에 줄 지시)",
+   "x": -570,
+   "y": -80,
+   "width": 300,
+   "height": 180,
+   "color": "4"
+  },
+  {
+   "id": "p_gat",
+   "type": "text",
+   "text": "#게이트\n(사람 확인 지점 — 실행이 여기서\n멈추고 물어본다)",
+   "x": -900,
+   "y": 130,
+   "width": 300,
+   "height": 180,
+   "color": "2"
+  },
+  {
+   "id": "grp_ex",
+   "type": "group",
+   "label": "예제 — 볼트 체결 검토 (스킬 3단 트리)",
+   "x": -180,
+   "y": -120,
+   "width": 1500,
+   "height": 700
+  },
+  {
+   "id": "x_dat",
+   "type": "text",
+   "text": "#자료\nM8 12.9 · 조임 토크 25 N·m\n외력 축방향 4 kN · 진동 환경\n피체결재 Al 6061",
+   "x": -140,
+   "y": 0,
+   "width": 320,
+   "height": 190,
+   "color": "5"
+  },
+  {
+   "id": "x_s1",
+   "type": "text",
+   "text": "#스킬\n스킬: vdi2230\n위 자료로 예압 Fmin/Fmax·조임마진 αA·\n체결 안전계수 검토",
+   "x": 220,
+   "y": 0,
+   "width": 320,
+   "height": 190,
+   "color": "4"
+  },
+  {
+   "id": "x_s2",
+   "type": "text",
+   "text": "#스킬\n스킬: reliability\n진동 환경 전제에서 위 체결부의\n풀림·피로 관점 보완 검토",
+   "x": 220,
+   "y": 240,
+   "width": 320,
+   "height": 190,
+   "color": "4"
+  },
+  {
+   "id": "x_gate",
+   "type": "text",
+   "text": "#게이트\n두 검토가 상충하면 여기서 정지 —\n채택안은 사람이 정한다",
+   "x": 580,
+   "y": 120,
+   "width": 320,
+   "height": 190,
+   "color": "2"
+  },
+  {
+   "id": "x_s3",
+   "type": "text",
+   "text": "#스킬\n스킬: gemini-review\n상류 두 검토 결론을 이종 교차검증 —\n사실오류·논리비약만 지적",
+   "x": 900,
+   "y": 120,
+   "width": 320,
+   "height": 190,
+   "color": "4"
+  },
+  {
+   "id": "x_flw",
+   "type": "text",
+   "text": "#플로우\n이름: bolt_check",
+   "x": 1240,
+   "y": 120,
+   "width": 320,
+   "height": 190,
+   "color": "6"
+  }
+ ],
+ "edges": [
+  {
+   "id": "ex0",
+   "fromNode": "x_dat",
+   "fromSide": "right",
+   "toNode": "x_s1",
+   "toSide": "left"
+  },
+  {
+   "id": "ex1",
+   "fromNode": "x_dat",
+   "fromSide": "right",
+   "toNode": "x_s2",
+   "toSide": "left"
+  },
+  {
+   "id": "ex2",
+   "fromNode": "x_s1",
+   "fromSide": "right",
+   "toNode": "x_gate",
+   "toSide": "left"
+  },
+  {
+   "id": "ex3",
+   "fromNode": "x_s2",
+   "fromSide": "right",
+   "toNode": "x_gate",
+   "toSide": "left"
+  },
+  {
+   "id": "ex4",
+   "fromNode": "x_gate",
+   "fromSide": "right",
+   "toNode": "x_s3",
+   "toSide": "left"
+  },
+  {
+   "id": "ex5",
+   "fromNode": "x_s3",
+   "fromSide": "right",
+   "toNode": "x_flw",
+   "toSide": "left"
+  }
+ ]
+}

@@ -1,0 +1,178 @@
+{
+ "nodes": [
+  {
+   "id": "usage",
+   "type": "text",
+   "text": "사용법 (첫 줄이 # 가 아니라 컴파일에 안 잡힘)\n1. 팔레트 노드를 복제해 값 수정, 전부 #GH작업 으로 화살표\n2. 실행: python3 ~/.claude/skills/rhino-gh/scripts/canvas2gh.py '<이 파일>' --write-back\n3. 스캐폴드(.py/.cs)와 명세(.md)가 ~/RhinoScripts 에 생긴다\n4. 명세를 클로드에 주고 \"이 명세 구현해줘\" → rhino-gh 스킬이 TODO 로직을 채운다\n규칙: 첫 줄 #타입 단독 · 입출력 순서 = 캔버스 위→아래 · 입력 이름은 파이썬 식별자(예약어 금지)",
+   "x": -900,
+   "y": -420,
+   "width": 600,
+   "height": 240
+  },
+  {
+   "id": "grp_pal",
+   "type": "group",
+   "label": "팔레트 — 복제해서 쓰기",
+   "x": -940,
+   "y": -140,
+   "width": 660,
+   "height": 900
+  },
+  {
+   "id": "p_in",
+   "type": "text",
+   "text": "#입력\n이름: crv\n타입: Curve\n접근: item\n설명: 대상 곡선",
+   "x": -580,
+   "y": -100,
+   "width": 280,
+   "height": 170,
+   "color": "4"
+  },
+  {
+   "id": "p_out",
+   "type": "text",
+   "text": "#출력\n이름: pts\n타입: Point3d[]\n설명: 결과",
+   "x": -900,
+   "y": 100,
+   "width": 280,
+   "height": 170,
+   "color": "1"
+  },
+  {
+   "id": "p_lg",
+   "type": "text",
+   "text": "#로직\n(둘째 줄부터 자유 텍스트 —\n무엇을 계산할지 적어라)",
+   "x": -580,
+   "y": 100,
+   "width": 280,
+   "height": 170,
+   "color": "3"
+  },
+  {
+   "id": "p_env",
+   "type": "text",
+   "text": "#환경\nrhino: 8\n언어: python3",
+   "x": -900,
+   "y": 300,
+   "width": 280,
+   "height": 170,
+   "color": "5"
+  },
+  {
+   "id": "p_dst",
+   "type": "text",
+   "text": "#산출\n폴더: ~/RhinoScripts",
+   "x": -580,
+   "y": 300,
+   "width": 280,
+   "height": 170,
+   "color": "5"
+  },
+  {
+   "id": "grp_ex",
+   "type": "group",
+   "label": "예제 — 곡선 등분점 (selftest 검증 어휘)",
+   "x": -160,
+   "y": -140,
+   "width": 1080,
+   "height": 900
+  },
+  {
+   "id": "x_i1",
+   "type": "text",
+   "text": "#입력\n이름: crv\n타입: Curve\n접근: item\n설명: 대상 곡선",
+   "x": -120,
+   "y": -80,
+   "width": 300,
+   "height": 160,
+   "color": "4"
+  },
+  {
+   "id": "x_i2",
+   "type": "text",
+   "text": "#입력\n이름: n\n타입: int\n기본값: 10\n설명: 분할 수",
+   "x": -120,
+   "y": 100,
+   "width": 300,
+   "height": 160,
+   "color": "4"
+  },
+  {
+   "id": "x_o1",
+   "type": "text",
+   "text": "#출력\n이름: pts\n타입: Point3d[]\n설명: 등분점",
+   "x": -120,
+   "y": 280,
+   "width": 300,
+   "height": 160,
+   "color": "1"
+  },
+  {
+   "id": "x_lg",
+   "type": "text",
+   "text": "#로직\ncrv 를 n 등분한 파라미터에서 점을 뽑아 pts 로 반환.\n곡선이 None 이면 빈 리스트.",
+   "x": -120,
+   "y": 460,
+   "width": 300,
+   "height": 160,
+   "color": "3"
+  },
+  {
+   "id": "x_env",
+   "type": "text",
+   "text": "#환경\nrhino: 8\n언어: python3",
+   "x": -120,
+   "y": 620,
+   "width": 300,
+   "height": 160,
+   "color": "5"
+  },
+  {
+   "id": "x_task",
+   "type": "text",
+   "text": "#GH작업\n이름: div_curve\n형태: script\n설명: 곡선 등분점",
+   "x": 320,
+   "y": 220,
+   "width": 300,
+   "height": 160,
+   "color": "6"
+  }
+ ],
+ "edges": [
+  {
+   "id": "ex0",
+   "fromNode": "x_i1",
+   "fromSide": "right",
+   "toNode": "x_task",
+   "toSide": "left"
+  },
+  {
+   "id": "ex1",
+   "fromNode": "x_i2",
+   "fromSide": "right",
+   "toNode": "x_task",
+   "toSide": "left"
+  },
+  {
+   "id": "ex2",
+   "fromNode": "x_o1",
+   "fromSide": "right",
+   "toNode": "x_task",
+   "toSide": "left"
+  },
+  {
+   "id": "ex3",
+   "fromNode": "x_lg",
+   "fromSide": "right",
+   "toNode": "x_task",
+   "toSide": "left"
+  },
+  {
+   "id": "ex4",
+   "fromNode": "x_env",
+   "fromSide": "right",
+   "toNode": "x_task",
+   "toSide": "left"
+  }
+ ]
+}

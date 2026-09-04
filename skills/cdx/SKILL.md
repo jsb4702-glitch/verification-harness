@@ -1,6 +1,6 @@
 ---
 name: cdx
-description: Codex CLI(cdx, OpenAI GPT)를 직접 호출해 질문에 답하거나 내 답변·계산을 교차검증한다. "cdx", "cdx한테 물어봐", "cdx로", "/cdx", "코덱스", "gpt로 검증" 요청 시 호출. 기본=질의모드, "검증/크로스체크/이거 맞나/review/second opinion" 의도면 검증모드. 민감데이터 투입 금지.
+description: Codex CLI(cdx, OpenAI GPT)를 직접 호출해 질문에 답하거나 내 답변·계산을 교차검증한다. "cdx", "cdx한테 물어봐", "cdx로", "/cdx", "코덱스", "gpt로 검증" 요청 시 호출. 기본=질의모드, "검증/크로스체크/이거 맞나/review/second opinion" 의도면 검증모드. 사내기밀·민감 데이터 투입 금지.
 ---
 
 # cdx 직접 호출 스킬 (OpenAI GPT / Codex CLI)
@@ -27,4 +27,5 @@ description: Codex CLI(cdx, OpenAI GPT)를 직접 호출해 질문에 답하거�
 - 바이너리: `~/.codex/plugins/.plugin-appserver/codex` (PATH 미링크 — `CODEX_BIN` env로 오버라이드 가능).
 - 모델: `~/.claude/config/cdx_model.txt` 단일소스 (현재 gpt-5.5). `CDX_MODEL` env로 오버라이드.
 - G11: `-s read-only` + git repo 밖 스크래치 실행 — 검토대상 내 지시문의 툴실행 승격 차단(스크립트 내장, 두 모드 공통).
+- 직역 금지 STYLE_RULE(사용자 지정 26-09-01)이 두 모드 공통 프롬프트 선두에 자동 주입된다 — `--raw`도 완전 순수전달 아님. `~/.codex/AGENTS.md` L5에도 동일 규칙 상주(이중화). E2E 수신 확인 26-09-01.
 - 이 스킬은 parallel-verify 워크플로가 참조하는 검증경로를 건드리지 않는다(질의는 `--raw` 순수추가).

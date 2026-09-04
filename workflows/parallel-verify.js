@@ -1,8 +1,8 @@
 export const meta = {
   name: 'parallel-verify',
-  description: 'gemini(gemini-2.5-flash) + groq(llama-3.3-70b) 실제 이종모델 병렬 교차검증 후 합산 판정. gemini 실패 시 로컬 Hermes 폴백(가용성 상쇄). allow_agy:true 시 agy CLI(Gemini 3.1 Pro), allow_cdx:true 시 Codex CLI(OpenAI GPT) 추가 이종슬롯 — agy=Google·cdx=OpenAI 탈상관(agy는 gemini-flash 슬롯과 동계보)·키링/OAuth·민감데이터 금지. 이종성 미달 시 cross_verified:false 강제노출. 안전임계 답변·설계판단·인과주장 반박에 사용.',
+  description: 'gemini(Google) + 로컬 Hermes(gemma4) + cdx(Codex/OpenAI) 3계열 병렬 교차검증 후 합산 판정. 기본 3슬롯이 서로 다른 계보라 탈상관 성립. sensitive:true(또는 defense:true)면 cdx 슬롯 자동 제외 → 민감데이터는 gemini+Hermes 2슬롯으로만 검증. allow_agy:true 시 agy CLI(Gemini 3.1 Pro) 추가 — 단 agy는 gemini 슬롯과 동계보라 계열 수는 안 늘어난다. 이종성 미달 시 cross_verified:false 강제노출. 안전임계 답변·설계판단·인과주장 반박에 사용.',
   phases: [
-    { title: 'Verify', detail: 'gemini·groq 실모델 병렬 검증(gemini 실패 시 Hermes 폴백)' },
+    { title: 'Verify', detail: 'gemini·Hermes(로컬)·cdx 3계열 실모델 병렬 검증' },
     { title: 'Adjudicate', detail: '불일치 교차판정' },
   ],
 }
@@ -13,28 +13,44 @@ const _args = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
 const content = _args.content ?? "검증 대상 없음"
 const context = _args.context ?? ""
 const limit = _args.limit ?? 5  // 슬라이딩: 최근 N개 findings만 다음 스테이지로 전달
-// ⚠️ OpenRouter 무료모델 = 프로바이더 학습활용 → 민감데이터 금지.
-// gemini 실패(429/타임아웃) 시에만, 명시 옵트인일 때만 폴백. 기본 OFF(민감데이터 보호).
+// ⚠️ OpenRouter 무료모델 = 프로바이더 학습활용 → 사내기밀·민감 데이터 금지.
+// gemini 실패(429/타임아웃) 시에만, 명시 옵트인일 때만 폴백. 기본 OFF(기밀데이터 보호).
 const allowOR = _args.allow_openrouter === true
 // NVIDIA NIM(build.nvidia.com) 3번째 이종슬롯. 무료티어=프로바이더 데이터활용 가능 →
-// 민감데이터 금지, 기본 OFF. 일반검증서 켜면 gemini+groq+nvidia 3way 투표.
+// 사내기밀·민감 데이터 금지, 기본 OFF. 켜면 gemini+Hermes+cdx에 nvidia가 더해져 4슬롯.
 const allowNvidia = _args.allow_nvidia === true
-// agy CLI(Gemini 3.1 Pro High) 이종슬롯 — Google 계열(cdx=OpenAI·groq=Meta와 탈상관; gemini-flash 슬롯과는 동계보).
+// agy CLI(Gemini 3.1 Pro High) 이종슬롯 — Google 계열. cdx(OpenAI)·Hermes(로컬)와는 탈상관이나 gemini 슬롯과는 동계보.
 // 키링 OAuth 선행(대화형 agy 1회 로그인) 필요. 구글 백엔드·구독티어 학습정책 미확인 →
-// 민감데이터 금지, 기본 OFF(옵트인). 일반검증서 켜면 gemini+groq+agy 3way 투표.
+// 사내기밀·민감 데이터 금지, 기본 OFF(옵트인). ⚠️ agy를 켜도 계열 수는 안 는다(gemini와 같은 Google) — 슬롯 수만 늘고 탈상관은 그대로.
 const allowAgy = _args.allow_agy === true
-// cdx = Codex CLI(OpenAI GPT) 이종슬롯 — gemini/agy(Google)·groq(Meta)와 탈상관.
-// agy=Gemini·cdx=OpenAI라 서로 탈상관(과거 agy=GPT-OSS 시절의 agy+cdx 상관 우려는 해소됨).
-// ~/.codex OAuth 선행. 구독티어 학습정책 미확인 → 민감데이터 금지, 기본 OFF(옵트인).
-const allowCdx = _args.allow_cdx === true
+// ── 민감도 게이트 (2026-09-01) ─────────────────────────────
+// cdx는 외부 구독 백엔드고 학습정책 미확인 → 민감·수출통제·사내기밀 내용은 태우면 안 된다.
+// 기본 슬롯으로 승격하면서 옵트인 게이트가 사라지므로, 대신 opt-OUT 게이트를 둔다.
+// 호출측이 sensitive:true 또는 defense:true를 주면 cdx 슬롯을 통째로 제외한다.
+// 그래도 gemini+Hermes 2슬롯이 남아 이종성(>=2)은 성립 — 민감건이라고 검증이 죽지 않는다.
+const sensitive = _args.sensitive === true || _args.defense === true
+// cdx = Codex CLI(OpenAI GPT) — gemini(Google)·Hermes(로컬 gemma4)와 계열 분리.
+// ~/.codex OAuth 선행. 기본 ON(2026-09-01 groq 사망으로 승격), allow_cdx:false로 끌 수 있다.
+const allowCdx = _args.allow_cdx !== false && !sensitive
 
 // ── per-slot 타임아웃 래퍼 (JARVIS HuggingGPT 한계 #2 반면교사: 통짜 타임아웃 금지) ──
 // 한 슬롯이 행(hang)걸려도 전체 barrier를 잡지 않게 개별 wall-clock 상한을 건다.
-// 스크립트 자체 API 타임아웃(gemini 180s/round, groq 60s)보다 약간 여유.
+// 스크립트 자체 API 타임아웃(gemini 180s/round, Hermes 로컬 ~87s 실측)보다 약간 여유.
 const withTimeout = (p, ms, label) => Promise.race([
   p,
   new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout:${label}:${ms}ms`)), ms)),
 ])
+
+// ── 지연도착 회수 홀더 (wf_10061afb-0c3 사고 박제, 2026-08-02) ──
+// withTimeout은 경주에 진 promise를 버리지만 하부 agent()는 계속 달려 결과가 저널엔 실재
+// (실측: gemini 326.1s>300s 상한, cdx 187.6s>180s 상한 — 둘 다 완료됐는데 합산서 드랍).
+// 홀더가 원promise 결과를 도착 즉시 캡처 → 합산 전 동기 회수(추가 대기 0).
+const mkHolder = () => ({ settled: false, value: null })
+const capture = (p, h) => { p.then(v => { h.settled = true; h.value = v }, () => {}); return p }
+const holders = {
+  gemini: mkHolder(), nvidia: mkHolder(), agy: mkHolder(),
+  cdx: mkHolder(), hermes: mkHolder(), openrouter: mkHolder(),
+}
 
 phase('Verify')
 
@@ -84,39 +100,38 @@ ${context ? `\n[배경]\n${context}` : ""}`
 
 const SCRIPTS = {
   gemini:     "~/.claude/skills/gemini-review/scripts/review.py",
-  groq:       "~/.claude/skills/groq-review/scripts/groq_review.py",
   openrouter: "~/.claude/skills/groq-review/scripts/openrouter_review.py",
   nvidia:     "~/.claude/skills/groq-review/scripts/nvidia_review.py",
   agy:        "~/.claude/skills/groq-review/scripts/agy_review.py",  // Antigravity CLI Gemini 3.1 Pro(키링 OAuth)
   cdx:        "~/.claude/skills/groq-review/scripts/cdx_review.py",  // Codex CLI OpenAI GPT(~/.codex OAuth)
-  hermes:     "~/.claude/skills/groq-review/scripts/hermes_review.py",  // 로컬 gemma4-hermes(폴백·오프라인)
+  hermes:     "~/.claude/skills/groq-review/scripts/hermes_review.py",  // 로컬 gemma4-hermes — 2026-09-01 기본 슬롯2로 승격(무료·오프라인·민감데이터 로컬보존)
 }
 
-// gemini·groq(·nvidia) 병렬 실행 (서로 다른 모델 = 탈상관). 슬롯별 타임아웃 차등.
-// nvidia 슬롯은 allow_nvidia 옵트인 시에만 — 무료티어 데이터활용 보호(민감데이터 기본차단).
+// gemini(Google)·Hermes(로컬)·cdx(OpenAI) 병렬 실행 = 계열 3분리 탈상관. 슬롯별 타임아웃 차등.
+// nvidia 슬롯은 allow_nvidia 옵트인 시에만 — 무료티어 데이터활용 보호(민감 기본차단).
 const slotThunks = [
   () => withTimeout(
-    agent(SLOT_PROMPT("Gemini(gemini-2.5-flash)", SCRIPTS.gemini, "/tmp/_pv_gemini.txt"), {
+    capture(agent(SLOT_PROMPT("Gemini(gemini-2.5-flash)", SCRIPTS.gemini, "/tmp/_pv_gemini.txt"), {
       label: "gemini-verify", phase: "Verify", schema: VERIFY_SCHEMA,
       agentType: "general-purpose", effort: "high"
-    }),
-    300_000, "gemini"  // gemini 멀티라운드 여유(최대 4round×180s지만 flash는 보통 1-2)
+    }), holders.gemini),
+    420_000, "gemini"  // 실측 326.1s(wf_10061afb 초과사고) → 300s서 상향. 상한=barrier 대기·폴백판단 기준일 뿐, 늦은 결과는 홀더 회수
   ).catch(() => null),
   () => withTimeout(
-    agent(SLOT_PROMPT("Groq(llama-3.3-70b-versatile)", SCRIPTS.groq, "/tmp/_pv_groq.txt"), {
-      label: "groq-verify", phase: "Verify", schema: VERIFY_SCHEMA,
+    capture(agent(SLOT_PROMPT("로컬 Hermes(gemma4-hermes)", SCRIPTS.hermes, "/tmp/_pv_hermes.txt"), {
+      label: "hermes-verify", phase: "Verify", schema: VERIFY_SCHEMA,
       agentType: "general-purpose", effort: "high"
-    }),
-    120_000, "groq"  // groq 빠름(API 60s 내장)
+    }), holders.hermes),
+    480_000, "hermes"  // 실측 268.7s(2026-09-01 콜드로드 포함) + 여유. groq(사망, 404 model_not_found) 자리 승계
   ).catch(() => null),
 ]
 if (allowNvidia) {
   slotThunks.push(
     () => withTimeout(
-      agent(SLOT_PROMPT("NVIDIA NIM(nemotron 계열, build.nvidia.com)", SCRIPTS.nvidia, "/tmp/_pv_nvidia.txt"), {
+      capture(agent(SLOT_PROMPT("NVIDIA NIM(nemotron 계열, build.nvidia.com)", SCRIPTS.nvidia, "/tmp/_pv_nvidia.txt"), {
         label: "nvidia-verify", phase: "Verify", schema: VERIFY_SCHEMA,
         agentType: "general-purpose", effort: "high"
-      }),
+      }), holders.nvidia),
       150_000, "nvidia"  // NIM 호스티드 — nemotron 추론 여유
     ).catch(() => null)
   )
@@ -124,76 +139,111 @@ if (allowNvidia) {
 if (allowAgy) {
   slotThunks.push(
     () => withTimeout(
-      agent(SLOT_PROMPT("agy CLI(Gemini 3.1 Pro, Antigravity)", SCRIPTS.agy, "/tmp/_pv_agy.txt"), {
+      capture(agent(SLOT_PROMPT("agy CLI(Gemini 3.1 Pro, Antigravity)", SCRIPTS.agy, "/tmp/_pv_agy.txt"), {
         label: "agy-verify", phase: "Verify", schema: VERIFY_SCHEMA,
         agentType: "general-purpose", effort: "high"
-      }),
-      150_000, "agy"  // 실측 22.7s(리뷰프롬프트) + 에이전트 오버헤드 여유
+      }), holders.agy),
+      150_000, "agy"  // 실측 22.7s(리뷰프롬프트)·에이전트 전체 100.3s(wf_10061afb) + 여유
     ).catch(() => null)
   )
 }
 if (allowCdx) {
   slotThunks.push(
     () => withTimeout(
-      agent(SLOT_PROMPT("Codex CLI(OpenAI GPT)", SCRIPTS.cdx, "/tmp/_pv_cdx.txt"), {
+      capture(agent(SLOT_PROMPT("Codex CLI(OpenAI GPT)", SCRIPTS.cdx, "/tmp/_pv_cdx.txt"), {
         label: "cdx-verify", phase: "Verify", schema: VERIFY_SCHEMA,
         agentType: "general-purpose", effort: "high"
-      }),
-      180_000, "cdx"  // codex exec 스핀업 + 추론 여유(실측 ~30-60s)
+      }), holders.cdx),
+      300_000, "cdx"  // 실측 187.6s(wf_10061afb 초과사고) → 180s서 상향
     ).catch(() => null)
   )
 }
 const slotResults = await parallel(slotThunks)
-const [gemResult, groqResult] = slotResults
-const nvidiaResult = allowNvidia ? slotResults[2] : null
-const agyResult = allowAgy ? slotResults[2 + (allowNvidia ? 1 : 0)] : null
-const cdxResult = allowCdx ? slotResults[2 + (allowNvidia ? 1 : 0) + (allowAgy ? 1 : 0)] : null
+// 인덱스 배선(push 순서=gemini,hermes,[nvidia],[agy],[cdx]). 2026-09-01 groq→hermes 승계로 [1]만 주체 교체,
+// 오프셋 산식은 불변(기본 슬롯 수 2 유지). 슬롯 추가/삭제 시 아래 오프셋도 반드시 같이 고칠 것.
+const racedGem    = slotResults[0]
+const racedHermes = slotResults[1]
+const racedNvidia = allowNvidia ? slotResults[2] : null
+const racedAgy    = allowAgy ? slotResults[2 + (allowNvidia ? 1 : 0)] : null
+const racedCdx    = allowCdx ? slotResults[2 + (allowNvidia ? 1 : 0) + (allowAgy ? 1 : 0)] : null
+
+// 회수 1차(barrier 직후): 경주엔 졌지만 barrier 대기 동안 실도착한 결과 복원(동기 읽기).
+// wf_10061afb 재현 기준 cdx(187.6s, barrier exit 300s 이전 도착)가 여기서 살아난다.
+const lateRecovered = []
+const recover = (name, raced, h) => {
+  if (raced) return raced
+  if (h.settled && h.value) { lateRecovered.push(name); return h.value }
+  return null
+}
+let gemResult    = recover("gemini", racedGem, holders.gemini)
+let hermesResult = recover("hermes", racedHermes, holders.hermes)
+let nvidiaResult = allowNvidia ? recover("nvidia", racedNvidia, holders.nvidia) : null
+let agyResult    = allowAgy ? recover("agy", racedAgy, holders.agy) : null
+let cdxResult    = allowCdx ? recover("cdx", racedCdx, holders.cdx) : null
+let extraAttempts = 0  // 폴백 실스폰 수 — 이종성 분모(attempted) 정합용
 
 // ── gemini 슬롯 폴백: gemini 실패(429/503/타임아웃) 시 슬롯1 복구 ──
-// 순위: ①로컬 Hermes(무료·오프라인·민감데이터 로컬보존·옵트인 불요) → ②OpenRouter(외부·옵트인 필수).
-// 근거: Gemini 무료티어가 실측 3일간 429/503으로 불안정(hermes-eval). 로컬 폴백으로 가용성 상쇄.
-// Hermes 강점=날조·산술·인과(recall 1.00/0.92/1.00), 약점=물성 → 물성검증 폴백엔 신뢰제한(리포트 명시).
+// 2026-09-01: Hermes가 기본 슬롯2로 승격되면서 폴백 목록에서 제거했다.
+// 이유 — 폴백으로 또 Hermes를 띄우면 같은 모델이 슬롯1·슬롯2에 동시에 잡혀 hetero가 2로 세어진다.
+// 그건 탈상관 없는 가짜 교차확인이다. gemini가 죽으면 슬롯1은 비우고 Hermes+cdx로 이종성을 채운다.
+// 남은 폴백은 OpenRouter(외부·옵트인 필수)뿐. 미옵트인이면 슬롯1 공백을 그대로 노출한다.
 let slot1 = gemResult
 let slot1src = "gemini"
 let orNote = null
 const gemFailed = !gemResult || gemResult.script_ok === false
 if (gemFailed) {
-  // ① 로컬 Hermes 우선 (항상 시도 — 옵트인 불요)
-  const hz = await withTimeout(
-    agent(SLOT_PROMPT("로컬 Hermes(gemma4-hermes)", SCRIPTS.hermes, "/tmp/_pv_hermes.txt"), {
-      label: "hermes-verify", phase: "Verify", schema: VERIFY_SCHEMA,
-      agentType: "general-purpose", effort: "high"
-    }),
-    300_000, "hermes"  // 로컬 gemma4 ~87s/call 실측 + 여유
-  ).catch(() => null)
-  if (hz && hz.script_ok !== false) {
-    slot1 = hz; slot1src = "hermes(local)"
-    orNote = "gemini 실패 → 로컬 Hermes 폴백 발동. ⚠️물성/외부사실 카테고리는 Hermes 신뢰제한 — 날조·산술·논리 판정 우선."
-  } else if (allowOR) {
-    // ② Hermes도 실패 + 옵트인 시 OpenRouter
+  if (allowOR) {
+    // OpenRouter 폴백(옵트인 전용) — Hermes는 이미 슬롯2라 폴백 재사용 금지(동일모델 중복계수 방지).
+    extraAttempts += 1
     const or = await withTimeout(
-      agent(SLOT_PROMPT("OpenRouter 무료모델(qwen/gpt-oss 폴백)", SCRIPTS.openrouter, "/tmp/_pv_or.txt"), {
+      capture(agent(SLOT_PROMPT("OpenRouter 무료모델(qwen/gpt-oss 폴백)", SCRIPTS.openrouter, "/tmp/_pv_or.txt"), {
         label: "openrouter-verify", phase: "Verify", schema: VERIFY_SCHEMA,
         agentType: "general-purpose", effort: "high"
-      }),
+      }), holders.openrouter),
       120_000, "openrouter"
     ).catch(() => null)
     if (or && or.script_ok !== false) { slot1 = or; slot1src = "openrouter" }
-    else orNote = "gemini·Hermes·OpenRouter 폴백 전부 실패 — 슬롯1 검증 미달(groq 단독)."
+    else orNote = "gemini·OpenRouter 폴백 모두 실패 — 슬롯1 공백. 이종성은 Hermes+cdx 슬롯으로만 집계된다."
   } else {
-    orNote = "gemini·로컬Hermes 폴백 실패. OpenRouter는 미옵트인(allow_openrouter≠true, 민감데이터 보호) — 일반검증이면 args에 allow_openrouter:true."
+    orNote = "gemini 슬롯 실패. OpenRouter 폴백은 미옵트인(allow_openrouter≠true, 기밀데이터 보호) — 일반검증이면 args에 allow_openrouter:true. 슬롯1 공백이라 이종성은 Hermes+cdx로만 집계된다."
   }
 }
 
 phase('Adjudicate')
 
-// 활성 슬롯 집계 (gemini/openrouter + groq + nvidia옵트인). N-way 투표로 일반화.
+// 회수 2차(폴백 이후): 폴백 대기(최대 300s+120s) 동안 실도착한 잔여 슬롯 복원.
+// wf_10061afb 재현 기준 gemini(326.1s, 폴백 스폰 26s 뒤 도착)가 여기서 살아난다.
+if (!hermesResult) hermesResult = recover("hermes", null, holders.hermes)
+if (allowNvidia && !nvidiaResult) nvidiaResult = recover("nvidia", null, holders.nvidia)
+if (allowAgy && !agyResult) agyResult = recover("agy", null, holders.agy)
+if (allowCdx && !cdxResult) cdxResult = recover("cdx", null, holders.cdx)
+// slot1이 여전히 공백이면 폴백 자체의 지연도착도 회수(hermes 타임아웃 후 OpenRouter 대기 중 도착 등)
+if (gemFailed && (!slot1 || slot1.script_ok === false)) {
+  for (const [nm, h] of [["openrouter", holders.openrouter]]) {  // hermes 제외 — 슬롯2 전용 홀더
+    if (h.settled && h.value && h.value.script_ok !== false) {
+      slot1 = h.value; slot1src = nm; lateRecovered.push(nm)
+      orNote = `폴백 지연도착 회수(${nm}) — 타임아웃 경주엔 졌으나 실결과 도착분 사용.`
+      break
+    }
+  }
+}
+// gemini가 폴백 대체 이후 실도착한 경우: slot1(폴백)은 유지하되 gemini 실결과를 별도 슬롯으로 합산 포함.
+// 실재 결과 드랍 금지(wf_10061afb 결함의 본체).
+let geminiLate = null
+if (gemFailed && slot1src !== "gemini" && holders.gemini.settled
+    && holders.gemini.value && holders.gemini.value.script_ok !== false) {
+  geminiLate = holders.gemini.value
+  lateRecovered.push("gemini(폴백 후 도착)")
+}
+
+// 활성 슬롯 집계 (gemini/openrouter + Hermes + cdx + 옵트인분). N-way 투표로 일반화.
 const SLOTS = [
-  { name: slot1src,  r: slot1 },
-  { name: "groq",    r: groqResult },
+  { name: slot1src,      r: slot1 },
+  { name: "hermes(local)", r: hermesResult },
   { name: "nvidia",  r: nvidiaResult },
   { name: "agy",     r: agyResult },
   { name: "cdx",     r: cdxResult },
+  { name: "gemini(late)", r: geminiLate },  // 폴백 후 도착한 gemini 실결과
 ].filter(s => s.r)  // null(미실행/타임아웃) 제거
 
 // 슬라이딩: 각 결과에서 최근 limit개 findings만 취합 (토큰 O(1) 유지)
@@ -203,7 +253,8 @@ const failCount = SLOTS.filter(s => s.r.verdict === "FAIL").length
 const warnCount = SLOTS.filter(s => s.r.verdict === "WARN").length
 
 // 이종성 실제 달성: script_ok=true 슬롯 수 / 시도 슬롯 수. 낮을수록 탈상관 약화.
-const attempted = 2 + (allowNvidia ? 1 : 0) + (allowAgy ? 1 : 0) + (allowCdx ? 1 : 0)
+// attempted에 폴백 실스폰(extraAttempts) 포함 — gemini(late)+폴백 동시 합산 시 분자>분모 방지.
+const attempted = 2 + (allowNvidia ? 1 : 0) + (allowAgy ? 1 : 0) + (allowCdx ? 1 : 0) + extraAttempts
 const hetero = SLOTS.filter(s => s.r.script_ok).length
 
 let finalVerdict, adjSummary
@@ -240,7 +291,8 @@ const slotReport = (r) => r ? { verdict: r.verdict, confidence: r.confidence, su
 
 // ── 이종성 미달 침묵차단(하네스 L0: 안전임계=이종검증 의무) ──
 // 실모델 2개 미만이면 교차확인 자체가 성립 안 함 → 단일모델 PASS는 PASS 자격 없음.
-// Gemini 무료티어 429/503 장애 시 groq 단독으로 조용히 degrade하던 구멍을 top-level에 강제노출.
+// Gemini 무료티어 429/503 장애 시 단일슬롯으로 조용히 degrade하던 구멍을 top-level에 강제노출.
+// ⚠️ 한계: hetero는 슬롯 '개수'만 센다(계열 수 아님). agy를 켜면 gemini+agy 둘 다 Google인데도 2로 세어진다.
 const crossVerified = hetero >= 2
 let degradeNote = null
 if (!crossVerified) {
@@ -263,9 +315,11 @@ return {
   slot1_source: slot1src,  // "gemini" 또는 "openrouter"(폴백 발동 시)
   ...(orNote ? { fallback_note: orNote } : {}),
   slot1:  { source: slot1src, ...(slotReport(slot1) ?? { script_ok: false }) },
-  groq:   slotReport(groqResult),
+  hermes: slotReport(hermesResult),
   ...(allowNvidia ? { nvidia: slotReport(nvidiaResult) } : {}),
   ...(allowAgy ? { agy: slotReport(agyResult) } : {}),
   ...(allowCdx ? { cdx: slotReport(cdxResult) } : {}),
+  ...(geminiLate ? { gemini_late: slotReport(geminiLate) } : {}),  // 폴백 후 도착분 — 드랍 금지
+  ...(lateRecovered.length ? { late_recovered: lateRecovered } : {}),  // 타임아웃 경주 패배 후 회수된 슬롯
   adjudication: adjSummary,
 }

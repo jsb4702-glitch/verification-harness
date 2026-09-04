@@ -1,0 +1,23 @@
+[
+  {"query": "그래스호퍼에서 커브 나눠서 포인트마다 원 박는 정의를 파이썬 스크립트 컴포넌트로 짜줘", "should_trigger": true},
+  {"query": "I want to build a custom Grasshopper component in C# that reverses a string input, where do I start", "should_trigger": true},
+  {"query": "라이노 8 스크립트에디터에서 numpy 쓰려면 어떻게 설치하냐", "should_trigger": true},
+  {"query": "GH_Component 상속해서 SolveInstance 구현했는데 입력이 안 들어와, DA.GetData가 false 리턴함", "should_trigger": true},
+  {"query": "rhino3dm으로 라이노 없이 .3dm 파일 읽어서 브렙 개수 세는 파이썬 스크립트", "should_trigger": true},
+  {"query": "데이터 트리 {0;1} 경로가 뭔 뜻이야, 그래프트랑 플랫튼 언제 쓰는거야", "should_trigger": true},
+  {"query": "rhinocode CLI로 터미널에서 라이노에 스크립트 던질 수 있어?", "should_trigger": true},
+  {"query": "만든 .gha 플러그인 Yak으로 패키징해서 배포하는 절차 알려줘", "should_trigger": true},
+  {"query": "맥에서 그래스호퍼 정의를 헤드리스로 돌릴 방법 있나, Rhino.Compute 되나", "should_trigger": true},
+  {"query": "클로드가 그래스호퍼 캔버스 직접 조작하게 MCP 연결하고 싶다", "should_trigger": true},
+  {"query": "GHPython 컴포넌트에서 rhinoscriptsyntax랑 RhinoCommon 뭘 써야 돼", "should_trigger": true},
+
+  {"query": "솔리드웍스 어셈블리 순회하면서 부품 커스텀 속성 일괄 수정하는 매크로 짜줘", "should_trigger": false},
+  {"query": "이 STEP 파일 부피랑 최소거리 정밀 측정해줘", "should_trigger": false},
+  {"query": "Fusion 360 파이썬 API로 파라메트릭 모델 만드는 법", "should_trigger": false},
+  {"query": "NX에서 도면 템플릿 자동화하고 싶은데", "should_trigger": false},
+  {"query": "공차 스택업 RSS로 계산하고 몬테카를로 수율 뽑아줘", "should_trigger": false},
+  {"query": "메뚜기(grasshopper) 로봇 그리퍼 파지 알고리즘 논문 찾아줘", "should_trigger": false},
+  {"query": "SolidWorks에서 시뮬레이션 스터디 어떻게 짜", "should_trigger": false},
+  {"query": "STL을 NURBS로 역설계 변환해줘", "should_trigger": false},
+  {"query": "블렌더 지오메트리 노드로 프로시저럴 모델링 하는 법", "should_trigger": false}
+]

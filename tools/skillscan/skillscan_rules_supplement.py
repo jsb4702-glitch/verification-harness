@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """skillscan_rules_supplement.py — snyk/agent-scan issue-code 발췌를 skillscan 룰로 재작성.
 
-원본 툴(agent-scan)은 Snyk 계정+클라우드 전송 강제라 폐쇄망 부적합 → 도입 안 함.
+원본 툴(agent-scan)은 Snyk 계정+클라우드 전송 강제라 민감 부적합 → 도입 안 함.
 issue-code '분류체계'만 발췌해 내 정적 NL/CODE 룰로 재작성(복붙 없음, 정규식은 자체 작성).
 
 skillscan.py 통합지점: NL_RULES(line~38) / CODE_RULES(line~61) 리스트에 아래 항목 append.
@@ -47,11 +47,11 @@ NL_RULES_SUPPLEMENT = [
                 r"config|policy)\s+from\s+(https?://|the\s+url)", I),
      "HIGH", "런타임 원격지시 로드 (instruction mutation)", "prose+code"),
 
-    # W009 직접 금융거래 실행능력 (본 환경 저관련이나 범용성 위해 LOW로 표기)
+    # W009 직접 금융거래 실행능력 (민감 저관련이나 자비스 범용성 위해 LOW로 표기)
     ("X-FINANCIAL",
      re.compile(r"\b(transfer|send|withdraw|wire)\b[^.\n]{0,30}\b(funds?|money|payment|crypto|"
                 r"wallet|BTC|ETH|USD)\b", I),
-     "LOW", "직접 금융거래 실행 능력 (범용 위험, 본 환경 저관련)", "prose"),
+     "LOW", "직접 금융거래 실행 능력 (범용 위험, 민감 저관련)", "prose"),
 ]
 
 # ── CODE 계층 (코드/설정 내 강결합 패턴) ──────────────────────────────────

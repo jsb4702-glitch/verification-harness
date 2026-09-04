@@ -18,8 +18,16 @@ verdict 등급:
 
 사용:
   python3 cite_verdict.py DOI 10.1/x --title "..." --author "Smith" --year 2020
+  python3 cite_verdict.py ARXIV 2409.15771 --year 2025 --venue "ICLR"  # 학회연도=게재처 축
   python3 cite_verdict.py --title "..." --author "Smith"        # ID 없음 → OpenAlex fuzzy
 출력: JSON {verdict, subtests{...}, lookup{...}, candidates[...]}
+
+2026-07-25 거짓반증 수리(wf_69bfc458 동클래스 — cite_lookup 신규 필드 반영):
+  저자 = raw_authors 전체 목록 대조(전체 목록 어디에도 없을 때만 불일치. 종전 raw_author1
+         단독 대조는 공저자 인용을 content_mismatch로 오판).
+  연도 = raw_year(제출)·raw_year_updated(최근판) 2축 허용. 학회연도(venue year)는 별개 축 —
+         게재처 단서(raw_comment=arXiv / raw_journal=DOI)에 청구 학회명 확인되면 일치,
+         단서 부재면 불일치 단정 대신 판정보류(year_match=null).
 """
 import sys, os, json, re, subprocess, urllib.request, urllib.parse
 
@@ -64,13 +72,18 @@ def _title_sim(claimed, raw):
 
 
 def _author_match(claimed, found):
-    """청구 저자와 조회 저자가 성(토큰)을 공유하는가.
+    """청구 저자가 조회 저자 '전체 목록'과 성(토큰)을 공유하는가.
+    거짓반증 수리(2026-07-25): 제1저자만 대조하면 공저자 인용("Morstatter")을 불일치로
+    오판 → found는 전체 목록(raw_authors) 우선, 문자열(단일 저자)도 허용.
     양방향 토큰 교집합 — Crossref는 family만("LeCun"), OpenAlex는 풀네임("Ashish Vaswani")을
-    주므로 'in' 단방향은 방향 버그가 남. 교집합이면 first-author 성 공유로 판정.
+    주므로 'in' 단방향은 방향 버그가 남. 전체 목록 어디에도 토큰 공유가 없을 때만 False.
     (흔한 성 동명이인 FP 가능하나 인용검증 목적엔 허용 — 최종은 사람게이트)."""
     if not claimed or not found:
         return None  # 판정 불가 → 서브테스트 제외
-    ct, ft = _tokens(claimed), _tokens(found)
+    if isinstance(found, str):
+        found = [found]
+    ct = _tokens(claimed)
+    ft = set().union(*(_tokens(f) for f in found))
     if not ct or not ft:
         return None
     return bool(ct & ft)
@@ -110,7 +123,8 @@ def openalex_fuzzy(title, author=None, k=3):
     return {"candidates": cands}
 
 
-def verdict(ctype, value, claimed_title=None, claimed_author=None, claimed_year=None):
+def verdict(ctype, value, claimed_title=None, claimed_author=None, claimed_year=None,
+            claimed_venue=None):
     # ── ID 없는 인용 → OpenAlex fuzzy 경로 ──
     if not ctype or not value:
         if not claimed_title:
@@ -162,6 +176,7 @@ def verdict(ctype, value, claimed_title=None, claimed_author=None, claimed_year=
     r_title = lk.get("raw_title")
     r_author1 = lk.get("raw_author1")
     r_year = lk.get("raw_year")
+    r_year_upd = lk.get("raw_year_updated")
 
     title_sim = title_cont = None
     title_unverifiable = False
@@ -176,14 +191,30 @@ def verdict(ctype, value, claimed_title=None, claimed_author=None, claimed_year=
             subtests["title_match"] = None
             title_unverifiable = True
     if claimed_author is not None:
-        am = _author_match(claimed_author, r_author1)
+        # 거짓반증 수리: 전체 목록(raw_authors) 우선 대조, 구버전/RA폴백 응답은 raw_author1 폴백
+        am = _author_match(claimed_author, lk.get("raw_authors") or r_author1)
         if am is not None:
             subtests["author_match"] = am
-    if claimed_year and r_year:
+    if claimed_year and (r_year or r_year_upd):
         try:
-            subtests["year_match"] = int(claimed_year) == int(r_year)
+            cy = int(claimed_year)
+            ym = cy in [int(y) for y in (r_year, r_year_upd) if y is not None]
         except Exception:
-            pass
+            ym = "unparsable"  # 연도 파싱불가 → 서브테스트 제외 (종전 거동 유지)
+        if ym is False:
+            # 학회연도(venue year)는 제출연도와 별개 축(2026-07-25 수리): 게재처 단서에
+            # 청구 학회명이 확인되면 일치, 단서 부재면 불일치가 아니라 판정보류(null).
+            evidence = " ".join(x for x in (lk.get("raw_comment"), lk.get("raw_journal")) if x)
+            vt = _tokens(claimed_venue) if claimed_venue else set()
+            if vt:
+                if evidence and vt <= _tokens(evidence):
+                    ym = True
+                    subtests["year_note"] = "제출·최근판연도와 불일치하나 게재처 확인 — 학회연도 축 일치"
+                else:
+                    ym = None
+                    subtests["year_note"] = "제출·최근판연도 불일치·게재처 단서 미확인 — 불일치 단정 금지(판정보류)"
+        if ym != "unparsable":
+            subtests["year_match"] = ym
 
     checks = [v for k, v in subtests.items() if isinstance(v, bool) and k != "id_resolves"]
 
@@ -210,10 +241,40 @@ def verdict(ctype, value, claimed_title=None, claimed_author=None, claimed_year=
             "subtests": subtests, "lookup": lk}
 
 
+SHADOW_LOG = os.path.expanduser("~/.claude/logs/cite_verdict_shadow.jsonl")
+
+
+def _shadow_log(ctype, value, claimed, res):
+    """실행될 때마다 판정을 남긴다 — 승급 판정에 쓸 실사용 데이터.
+
+    2026-07-26 신설. 이 판정기는 citation-verify 워크플로에 미배선이라 실사용이 0건이었고,
+    데이터가 없으니 승급 판정을 못 하고, 판정을 못 하니 배선을 안 하는 순환에 갇혀 있었다.
+    호출측이 아니라 여기서 남기는 이유: 누가 어떤 경로로 부르든 데이터가 쌓인다.
+
+    판정 자체에는 영향이 없다(섀도). 기록 실패도 판정을 막지 않는다.
+    인용 식별자와 등급만 남긴다 — 청구 제목·저자 원문은 남기지 않는다(로그 비대·불필요).
+    """
+    try:
+        import datetime
+        os.makedirs(os.path.dirname(SHADOW_LOG), exist_ok=True)
+        row = {
+            "ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "type": ctype,
+            "value": value,
+            "verdict": res.get("verdict"),
+            "subtests": res.get("subtests"),
+            "has_claim": {k: bool(v) for k, v in claimed.items()},
+        }
+        with open(SHADOW_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass          # 계측 실패가 판정을 막지 않는다
+
+
 def main():
     args = sys.argv[1:]
     ctype = value = None
-    claimed = {"title": None, "author": None, "year": None}
+    claimed = {"title": None, "author": None, "year": None, "venue": None}
     pos = []
     i = 0
     while i < len(args):
@@ -224,11 +285,15 @@ def main():
             claimed["author"] = args[i + 1]; i += 2
         elif a == "--year":
             claimed["year"] = args[i + 1]; i += 2
+        elif a == "--venue":
+            claimed["venue"] = args[i + 1]; i += 2
         else:
             pos.append(a); i += 1
     if len(pos) >= 2:
         ctype, value = pos[0].upper(), pos[1]
-    res = verdict(ctype, value, claimed["title"], claimed["author"], claimed["year"])
+    res = verdict(ctype, value, claimed["title"], claimed["author"], claimed["year"],
+                  claimed["venue"])
+    _shadow_log(ctype, value, claimed, res)
     print(json.dumps(res, ensure_ascii=False, indent=2))
 
 

@@ -21,12 +21,21 @@ BASELINE = os.path.join(HERE, "baseline.json")
 DRIFT_LOG = os.path.join(HERE, "drift.log")
 NTFY = f"{HOME}/.claude/scripts/ntfy.sh"
 
-# 감시대상: 저변동·고위험 파일만 (메모리·projects 등 고변동 경로 제외)
-FILES = [
+# 2026-08-31 등급분리: 하네스를 개발하는 한 상시 바뀌는 설정 4종이 변조감시에 섞여 있어
+# 기준선을 맞춰도 며칠 만에 재드리프트 → 영구 알람포화(08-16 기준선이 0.0일 만에 재발 실측).
+# 상시 울리는 경보는 꺼진 경보와 같다. 이 4종은 "기록등급"으로 내린다 — 변경 이력은
+# drift.log에 RECORDED로 남기고 baseline에 자동 흡수, 경보·exit1은 안 낸다.
+# 단 UNREADABLE 전이(chmod 000 류 감시 무력화)와 삭제는 기록등급이라도 경보로 승격.
+RECORD_FILES = [
     f"{HOME}/.claude/CLAUDE.md",
-    f"{HOME}/CLAUDE.md",
     f"{HOME}/.claude/settings.json",
     f"{HOME}/.claude/settings.local.json",
+    f"{HOME}/.codex/config.toml",
+]
+
+# 감시대상: 저변동·고위험 파일만 (메모리·projects 등 고변동 경로 제외)
+FILES = [
+    f"{HOME}/CLAUDE.md",
     f"{HOME}/harness-bridge/bridge.py",
     f"{HOME}/harness-bridge/cite_rail.py",
     # 2026-07-18: 외부 에이전트 상시권한·실행표면 (agy grant 42건 누적을 놓친 구멍 봉합)
@@ -43,7 +52,6 @@ FILES = [
     # AGENTS.md는 그대로여도 해시가 달라진다 = 심링크 스왑 탐지 (중복비용 1해시)
     f"{HOME}/.gemini/GEMINI.md",
     # cdx는 권한이 스레드별이라 래칫 없음 → 대신 마켓플레이스 소스·모델·notify 훅 변조 감시
-    f"{HOME}/.codex/config.toml",
     f"{HOME}/.codex/hooks.json",
     # 제외 판단: .codex-global-state.json(전자 UI 상태·초단위 변동), auth.json(토큰 갱신마다 변함) — 노이즈만
     # 감시자 자기보호: 이 파일들 변조 = 감시 무력화 시도 (baseline.json은 자기참조라 제외 — NAS git 이중화로 커버)
@@ -73,6 +81,15 @@ CODE_DIRS = [
 ]
 CODE_EXT = (".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".ts", ".rb", ".pl")
 
+# 2026-08-31: 스킬 트리가 감시 사각이었다 — 승급 후 조용히 바뀌어도 무탐(rtk-rewrite.sh는
+# 모든 Bash 앞에서 도는 훅인데 잠금·해시감시 어디에도 없었다). 전체 43,598파일·1.4GB 중
+# venv/site-packages가 대부분이라 통째는 불가 → 코드 + 지시층(.md)만 698파일·해시 3초 실측.
+# SKILL.md는 자연어 지시층이라 코드와 동급 위협(공급망 불변식).
+SKILL_DIRS = [
+    f"{HOME}/.claude/skills",
+]
+SKILL_EXT = CODE_EXT + (".md",)
+
 # launchd가 자동실행하는 ~/.claude 밖 스크립트 (plist는 GLOBS로 이미 감시 중이나,
 # plist를 안 건드리고 타깃 스크립트 내용만 바꾸면 무탐지였다 — 래퍼/엔진 분리 문제)
 LAUNCHD_TARGETS = [
@@ -93,17 +110,17 @@ GLOBS = [
 
 
 def iter_targets():
-    for p in FILES + LAUNCHD_TARGETS:
+    for p in RECORD_FILES + FILES + LAUNCHD_TARGETS:
         if os.path.isfile(p):
             yield p
-    for d in CODE_DIRS:
+    for d, ext in [(x, CODE_EXT) for x in CODE_DIRS] + [(x, SKILL_EXT) for x in SKILL_DIRS]:
         if not os.path.isdir(d):
             continue
         for root, dirs, names in os.walk(d):
             dirs[:] = [x for x in dirs
-                       if not x.startswith(".") and x not in ("__pycache__", "venv", "node_modules", "store")]
+                       if not x.startswith(".") and x not in ("__pycache__", "venv", "node_modules", "store", "site-packages")]
             for n in sorted(names):
-                if n.endswith(CODE_EXT):
+                if n.endswith(ext):
                     yield os.path.join(root, n)
     for g in GLOBS:
         for p in sorted(glob.glob(g)):
@@ -165,29 +182,64 @@ def notify(msg):
             pass
 
 
+# 신규 파일 출현이 그 자체로 경보인 곳 — 놓이기만 하면 로드되는 디렉토리.
+# tools/scripts의 신규 파일은 누가 호출해야 돌므로 기록만 한다(개발 중 신규 스크립트가
+# 매번 경보를 만들던 포화 원인 절반). skills/hooks/workflows/LaunchAgents는 반대다.
+ALERT_ADD_PREFIXES = tuple(SKILL_DIRS) + tuple(DIRS) + (f"{HOME}/Library/LaunchAgents",)
+
+
+def classify(base, now):
+    """드리프트를 경보/기록 두 등급으로 분류. 반환: (alert줄들, record줄들, 기록흡수dict)"""
+    rec_set = set(RECORD_FILES)
+    alerts, records, absorb = [], [], {}
+    for p in sorted(p for p in base if p in now and base[p] != now[p]):
+        # 기록등급이라도 UNREADABLE 전이는 감시 무력화 시도라 경보 승격
+        if p in rec_set and not now[p].startswith("UNREADABLE"):
+            records.append(f"  ~ {p}")
+            absorb[p] = now[p]
+        else:
+            alerts.append(f"  ~ {p}")
+    for p in sorted(p for p in base if p not in now):
+        alerts.append(f"  - {p}")          # 삭제는 등급 무관 경보 — 파일이 사라지는 건 항상 신호
+    for p in sorted(p for p in now if p not in base):
+        if p.startswith(ALERT_ADD_PREFIXES):
+            alerts.append(f"  + {p}")
+        else:
+            records.append(f"  + {p}")
+            absorb[p] = now[p]
+    return alerts, records, absorb
+
+
 def cmd_check():
     if not os.path.isfile(BASELINE):
         print("no baseline — run: ig.py baseline", file=sys.stderr)
         return 2
     with open(BASELINE, encoding="utf-8") as f:
-        base = json.load(f)["files"]
+        doc = json.load(f)
+    base = doc["files"]
     now = snapshot()
-    changed = sorted(p for p in base if p in now and base[p] != now[p])
-    removed = sorted(p for p in base if p not in now)
-    added = sorted(p for p in now if p not in base)
-    if not (changed or removed or added):
-        print("clean")
-        return 0
+    alerts, records, absorb = classify(base, now)
     ts = datetime.now().isoformat(timespec="seconds")
-    lines = [f"[{ts}] DRIFT changed={len(changed)} removed={len(removed)} added={len(added)}"]
-    for tag, group in (("~", changed), ("-", removed), ("+", added)):
-        lines += [f"  {tag} {p}" for p in group]
-    report = "\n".join(lines)
+    if records:
+        # 2026-08-31 등급분리: 이력은 남기되 경보는 안 낸다. baseline에 흡수해 같은 변경이
+        # 매 회 다시 뜨는 포화를 차단(08-16 기준선 0.0일 재드리프트 실측이 계기).
+        # "자동수정 없음"은 감시 '대상' 이야기다 — baseline은 이 감시도구 자신의 상태다.
+        with open(DRIFT_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] RECORDED {len(records)}건 (경보 없음·baseline 흡수)\n"
+                    + "\n".join(records) + "\n")
+        base.update(absorb)
+        doc["updated"] = ts
+        with open(BASELINE, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=1)
+    if not alerts:
+        print(f"clean (recorded {len(records)})" if records else "clean")
+        return 0
+    report = f"[{ts}] DRIFT alert={len(alerts)} recorded={len(records)}\n" + "\n".join(alerts)
     with open(DRIFT_LOG, "a", encoding="utf-8") as f:
         f.write(report + "\n")
     print(report)
     # 공용 ntfy 경유라 경로·파일명 미포함 — 건수만 (상세는 로컬 drift.log)
-    notify(f"크리티컬 파일 {len(changed)+len(removed)+len(added)}건 변경 감지 — 맥 drift.log 확인")
+    notify(f"크리티컬 파일 {len(alerts)}건 변경 감지 — 맥 drift.log 확인")
     return 1
 
 

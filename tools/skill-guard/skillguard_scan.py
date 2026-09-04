@@ -13,11 +13,16 @@ usage:
   skillguard_scan.py --seed-only    # 태우지 않고 manifest만 기록(초기 무비용 배선)
   skillguard_scan.py --dry-run      # 대상만 출력, 모델 로드 안 함
 """
-import sys, os, json, glob, time, hashlib, datetime, argparse
+import sys, os, json, glob, time, hashlib, datetime, argparse, fcntl
 
 HOME = os.path.expanduser("~")
 TOOLDIR = os.path.join(HOME, ".claude", "tools", "skill-guard")
 MANIFEST = os.path.join(TOOLDIR, "scan_manifest.json")
+# 단일 실행 잠금(2026-09-04 커널패닉 재발방지). 세션이 초 단위로 대량 생성되면 SessionStart마다
+# 이 스캐너가 뜨고, 잠금이 없으면 모델(1.6GB)을 동시에 N개 로드해 메모리를 고갈시킨다
+# (실측: 15개 동시 상주 27GB → 스왑 고갈 → watchdog 패닉). 잠금 못 잡으면 조용히 빠진다 —
+# 스캔은 다음 세션 시작 때 어차피 다시 시도된다(manifest 해시 불일치가 남아 있으므로).
+LOCK = os.path.join(TOOLDIR, ".scan.lock")
 # 알려진 오탐: 판정은 계속 기록하되 알림/경고만 억제(알람 피로 방지). 사람이 명시 등재만.
 ALLOWLIST = os.path.join(TOOLDIR, "scan_allowlist.json")
 # 실행도장(무변경이라 조용히 끝나도 찍힘) — 훅이 실제로 돌았는지 확인용
@@ -84,11 +89,33 @@ def load_manifest():
         return {}
 
 
-def save_manifest(m):
+def save_manifest(m, updated=None):
+    """updated=갱신한 키 집합. 주어지면 디스크의 최신 manifest를 다시 읽어 그 키만 덮어쓴다
+    (읽기→스캔→통째 저장 사이에 남이 갱신한 항목을 옛 값으로 되돌리는 경주 차단)."""
+    if updated:
+        cur = load_manifest()
+        for k in updated:
+            if k in m:
+                cur[k] = m[k]
+        for k in [k for k in cur if k not in m]:   # 사라진 스킬 정리 결과 반영
+            cur.pop(k)
+        m = cur
     tmp = MANIFEST + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(m, f, ensure_ascii=False, indent=1, sort_keys=True)
     os.replace(tmp, MANIFEST)
+
+
+def acquire_lock():
+    """비차단 잠금. 성공=파일객체(유지해야 잠금 유지), 실패=None."""
+    try:
+        fh = open(LOCK, "a+")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fh.seek(0); fh.truncate()
+        fh.write(f"{os.getpid()} {datetime.datetime.now().isoformat(timespec='seconds')}\n"); fh.flush()
+        return fh
+    except (OSError, BlockingIOError):
+        return None
 
 
 def main():
@@ -103,6 +130,19 @@ def main():
     ap.add_argument("--max-chars", type=int, default=24000)
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
+
+    lock = acquire_lock()
+    if lock is None:
+        # 다른 스캔이 진행 중 — 모델 중복 로드 금지. 도장에 남겨 heartbeat가 구분 가능하게.
+        try:
+            os.makedirs(os.path.dirname(STAMP), exist_ok=True)
+            with open(STAMP, "w", encoding="utf-8") as f:
+                f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} skipped=locked\n")
+        except OSError:
+            pass
+        if not a.quiet:
+            print("  skill-guard[상시·shadow]: 다른 스캔 진행 중 — 이번 세션은 건너뜀")
+        return 0
 
     skills = discover_skills()
     man = load_manifest()
@@ -215,7 +255,7 @@ def main():
         # 스캔 성공한 것만 manifest 갱신 → 중단돼도 다음 회차에 재시도
         man[d] = {"hash": hashes[d], "scanned": ts, "verdict": res["verdict"]}
 
-    save_manifest(man)
+    save_manifest(man, updated={d for d, _ in results})
 
     total_gen = round(sum(r["latency_s"] for _, r in results), 2)
     line = f"{ts} skillguard_scan n={len(targets)} load={t_load}s gen={total_gen}s flagged={len(flagged)}"

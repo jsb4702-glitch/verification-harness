@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Attack stage — 레드팀 게이트 우회 시나리오 생성(구조화 JSON).
 
-하네스를 **직접 읽어** 프롬프트를 만들고 엔진(groq 기본) 호출 → JSON 시나리오 emit.
+하네스를 **직접 읽어** 프롬프트를 만들고 엔진(cdx 기본) 호출 → JSON 시나리오 emit.
 서브에이전트가 하네스를 /tmp에 Write하던 옛 방식 제거(느리고 stale-tmp 취약).
 
-Usage: aha_attack.py <harness_path> [findings_path] [-n N] [--engine groq|agy]
+Usage: aha_attack.py <harness_path> [findings_path] [-n N] [--engine cdx|gemini|agy]
 Stdout(JSON): {"scenarios":[{"id","gate_target","vector","expected_bypass"}], "script_ok":bool, "engine":str, "note":str}
 
-무인(launchd) 기본 = groq. --engine agy 는 대화형 전용(키링 hang, 호출측이 무인 아님 보장).
+무인(launchd) 기본 = cdx(OpenAI). 판정자 gemini(Google)·방어자 gemma4(로컬)와 계열이 갈려 탈상관 성립.
+--engine agy 는 대화형 전용(키링 hang, 호출측이 무인 아님 보장).
+--engine gemini 는 폴백용 — 판정자와 동계보라 공격·판정 독립성이 떨어진다(쓰면 리포트에 명시할 것).
+groq은 2026-09-02 폐기(모델 소멸 404 + 무료등급 분당토큰 8000 한도로 하네스 전문 태우면 413).
 """
 import sys, os, json, re, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -45,7 +48,7 @@ def main():
     ap.add_argument("harness")
     ap.add_argument("findings", nargs="?", default="")
     ap.add_argument("-n", type=int, default=6)
-    ap.add_argument("--engine", default="groq", choices=["groq", "agy"])
+    ap.add_argument("--engine", default="cdx", choices=["cdx", "gemini", "agy"])
     a = ap.parse_args()
 
     try:
@@ -54,7 +57,7 @@ def main():
         print(json.dumps({"scenarios": [], "script_ok": False, "engine": a.engine,
                           "note": f"harness read failed: {e}"})); return
 
-    # dedup 컨텍스트 = 기존 dedup_key만 추출(전문 덤프 금지 — groq 413/토큰 방지, findings 성장에도 강건)
+    # dedup 컨텍스트 = 기존 dedup_key만 추출(전문 덤프 금지 — 토큰 절약, findings 성장에도 강건)
     seen = ""
     if a.findings and os.path.exists(os.path.expanduser(a.findings)):
         try:

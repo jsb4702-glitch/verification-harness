@@ -4,7 +4,7 @@ OpenAI 호환 chat/completions. 무료모델 폴백루프(프로바이더 큐밀
 사용: python3 openrouter_review.py <검토할_파일.txt>
 출력: stdout에 비평 텍스트.
 
-⚠️ 무료모델은 프로바이더 학습 활용 가능 — 민감데이터 금지(호출측에서 게이트).
+⚠️ 무료모델은 프로바이더 학습 활용 가능 — 사내기밀·민감 데이터 금지(호출측에서 게이트).
    이 스크립트 자체는 콘텐츠 판단 안 함. allow 게이트는 워크플로(parallel-verify)가 책임.
 """
 import os, sys, json, urllib.request, urllib.error

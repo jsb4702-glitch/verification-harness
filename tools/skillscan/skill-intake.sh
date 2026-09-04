@@ -82,7 +82,7 @@ render_card() {
       -e "s|{{DYN_EXIT}}|$DS|g" -e "s|{{DYN_VIOL}}|$DV|g" \
       -e "s|{{INJ_L1}}|$INJ1|g" -e "s|{{INJ_L2}}|$INJ2|g" -e "s|{{HUMAN}}|❓검증자확정|g" \
       -e "s|{{USECASE}}|❓|g" -e "s|{{RISKS}}|❓|g" \
-      -e "s|{{EXPORT}}|❓ 수출통제 규정 저촉여부|g" -e "s|{{BOUNDARY}}|❓|g" \
+      -e "s|{{EXPORT}}|❓ 수출통제 규정/수출통제 규정 저촉여부|g" -e "s|{{BOUNDARY}}|❓|g" \
       "$TPL" > "$OUT"
   echo "  🪪 카드 생성: $OUT  (❓·[VERIFY] 마커는 사람검증서 해소)"
 }

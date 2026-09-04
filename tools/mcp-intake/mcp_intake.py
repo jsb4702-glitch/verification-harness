@@ -6,11 +6,15 @@ MCP 서버는 .claude.json에 한 줄 넣으면 PyPI/npm에서 코드가 곧장 
 실측: jcodemunch-mcp가 3주간 20+ 버전 자동갱신(핀 없음), 238파일·4.2MB가
 매 세션 툴 96개로 붙는데 INTAKE를 한 번도 안 거쳤다.
 
-감지 4종:
+감지 5종:
   1) 신규 MCP 서버 등장            → INTAKE 미이행 신호
   2) 버전 핀 없음                  → 매 실행 최신판 = 통제 불가
   3) 등록 정의 변경(명령·인자·env)  → 재검토 요구
   4) 활성 패키지 정적 스캔 HIGH     → 악성 신호 (skillscan 재사용)
+  5) 원격 서버 자기신고 버전 변경    → 서버측 코드/매니페스트 갱신 신호 (재검토 요구)
+     (Claude Code MCP 디버그 로그의 serverVersion 파싱 — 원격 서버는 무인증
+      조회가 막혀(consensus initialize 401 실측) 능동 프로브 불가, 수동 관측만.
+      런타임 결과 내 릴레이 필드 감시는 relay_watch.py(PostToolUse 훅) 담당.)
 
 판정은 사람게이트. 여기선 탐지·리포트만 한다.
 용법: mcp_intake.py [check|baseline]   종료코드 0=clean 1=변경/미핀 2=HIGH 3=내부오류
@@ -29,6 +33,7 @@ BASELINE = os.path.join(HERE, "baseline.json")
 LOG = os.path.join(HERE, "intake.log")
 SKILLSCAN = f"{HOME}/.claude/tools/skillscan/skillscan.py"
 CONFIGS = [f"{HOME}/.claude.json", f"{HOME}/.claude/settings.json"]
+MCPLOG_ROOT = f"{HOME}/Library/Caches/claude-cli-nodejs"
 
 
 def collect_servers():
@@ -56,12 +61,20 @@ def spec_digest(spec):
         "args": spec.get("args") or [],
         "env": sorted((spec.get("env") or {}).items()),
         "type": spec.get("type"),
+        "url": spec.get("url"),
+        "headers": sorted((spec.get("headers") or {}).items()),
     }, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(norm.encode()).hexdigest()[:16]
 
 
 def pkg_spec(spec):
     """실행 인자에서 패키지 스펙 추출 + 핀 여부. (pkg, pinned)"""
+    url = spec.get("url")
+    if url:
+        # 원격(http/sse) 서버: 코드가 로컬로 안 들어와 버전 핀 개념이 없다.
+        # 식별자=엔드포인트, https면 핀 동급. 엔드포인트/헤더 변경은 digest가 잡는다.
+        # 서버측 코드는 운영자가 언제든 갈 수 있음 → 신뢰근거는 INTAKE 시 출처검증.
+        return url, url.startswith("https://")
     args = [a for a in (spec.get("args") or []) if isinstance(a, str)]
     for a in args:
         if a.startswith("-"):
@@ -98,11 +111,52 @@ def scan_pkg(path):
             os.remove(tmp)
 
 
+def parse_server_version(path):
+    """디버그 로그 1개에서 서버 자기신고 버전 추출. 없으면 None."""
+    ver = None
+    try:
+        for line in open(path, encoding="utf-8"):
+            if "Connection established with capabilities" not in line:
+                continue
+            dbg = json.loads(line).get("debug", "")
+            i = dbg.find("{")
+            if i < 0:
+                continue
+            sv = json.loads(dbg[i:]).get("serverVersion") or {}
+            if sv:
+                ver = f"{sv.get('name', '?')} {sv.get('version', '?')}"
+    except Exception:
+        return None
+    return ver
+
+
+def server_versions():
+    """Claude Code MCP 디버그 로그에서 서버별 최신 자기신고 버전 수집.
+    로그 포맷은 Claude Code 버전에 종속 — 파싱 실패는 조용히 건너뛴다
+    (이 감지는 보조축, 주축은 relay_watch.py)."""
+    best = {}  # 이름 -> (mtime, 버전)
+    for d in glob.glob(f"{MCPLOG_ROOT}/*/mcp-logs-*"):
+        name = os.path.basename(d).replace("mcp-logs-", "")
+        files = sorted(glob.glob(os.path.join(d, "*.jsonl")),
+                       key=os.path.getmtime, reverse=True)
+        for fp in files[:5]:
+            ver = parse_server_version(fp)
+            if ver:
+                mt = os.path.getmtime(fp)
+                if name not in best or mt > best[name][0]:
+                    best[name] = (mt, ver)
+                break
+    return {k: v[1] for k, v in best.items()}
+
+
 def snapshot():
     snap = {}
+    vers = server_versions()
     for key, spec in collect_servers().items():
         pkg, pinned = pkg_spec(spec)
-        snap[key] = {"digest": spec_digest(spec), "pkg": pkg, "pinned": pinned}
+        short = key.split("::", 1)[-1]
+        snap[key] = {"digest": spec_digest(spec), "pkg": pkg, "pinned": pinned,
+                     "server_version": vers.get(short)}
     return snap
 
 
@@ -128,6 +182,14 @@ def cmd_check():
     changed = [k for k in now if k in base and now[k]["digest"] != base[k]["digest"]]
     removed = [k for k in base if k not in now]
     unpinned = [k for k, v in now.items() if not v["pinned"]]
+    # 서버 자기신고 버전 변경 (기준선·현재 양쪽에 관측값이 있을 때만 비교)
+    ver_changed = [
+        (k, base[k].get("server_version"), now[k].get("server_version"))
+        for k in now
+        if k in base and base[k].get("server_version")
+        and now[k].get("server_version")
+        and base[k]["server_version"] != now[k]["server_version"]
+    ]
 
     lines, worst = [], 0
     for k in added:
@@ -135,6 +197,11 @@ def cmd_check():
         worst = max(worst, 1)
     for k in changed:
         lines.append(f"  ~ 정의 변경(재검토 요구): {k}  pkg={now[k]['pkg']}")
+        worst = max(worst, 1)
+    for k, old_v, new_v in ver_changed:
+        lines.append(f"  ~ 원격 서버버전 변경(재검토 요구): {k}  {old_v} -> {new_v}"
+                     f"  — 서버측 갱신 신호, 툴 설명문/릴레이 필드 재검토 후"
+                     f" relay_watch.py 재핀 판단")
         worst = max(worst, 1)
     for k in removed:
         lines.append(f"  - 제거됨: {k}")

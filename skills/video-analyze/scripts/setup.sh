@@ -17,4 +17,4 @@ echo "[setup] yt-dlp + faster-whisper 설치..."
 echo "[setup] 검증:"
 "$VENV/bin/yt-dlp" --version
 "$VENV/bin/python" -c "from faster_whisper import WhisperModel; print('faster-whisper OK')"
-echo "[setup] 완료. (Gemini 경로는 ~/.config/secrets.env 의 GEMINI_API_KEY 사용)"
+echo "[setup] 완료. (Gemini 경로는 ~/.config/secrets.env 의 GEMINI_API_KEYS 사용 — AQ 형식 키. 구형 AIza 는 2026-09 부터 거부됨)"
