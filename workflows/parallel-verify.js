@@ -1,8 +1,8 @@
 export const meta = {
   name: 'parallel-verify',
-  description: 'gemini(Google) + 로컬 Hermes(gemma4) + cdx(Codex/OpenAI) 3계열 병렬 교차검증 후 합산 판정. 기본 3슬롯이 서로 다른 계보라 탈상관 성립. sensitive:true(또는 defense:true)면 cdx 슬롯 자동 제외 → 민감데이터는 gemini+Hermes 2슬롯으로만 검증. allow_agy:true 시 agy CLI(Gemini 3.1 Pro) 추가 — 단 agy는 gemini 슬롯과 동계보라 계열 수는 안 늘어난다. 이종성 미달 시 cross_verified:false 강제노출. 안전임계 답변·설계판단·인과주장 반박에 사용.',
+  description: 'gemini(Google) + 로컬 Hermes(gemma4) + cdx(Codex/OpenAI) 3계열 병렬 교차검증 후 합산 판정. 기본 3슬롯이 서로 다른 계보라 탈상관 성립. sensitive:true(또는 defense:true)면 외부로 나가는 슬롯을 전부 제외(gemini·cdx·agy·nvidia·openrouter)하고 로컬 2계열 Hermes(gemma4)+qwen3(Qwen)로만 검증 — 데이터가 기기 밖으로 안 나간다. allow_agy:true 시 agy CLI(Gemini 3.1 Pro) 추가 — 단 agy는 gemini 슬롯과 동계보라 계열 수는 안 늘어난다. 이종성 미달 시 cross_verified:false 강제노출. 안전임계 답변·설계판단·인과주장 반박에 사용.',
   phases: [
-    { title: 'Verify', detail: 'gemini·Hermes(로컬)·cdx 3계열 실모델 병렬 검증' },
+    { title: 'Verify', detail: '3계열 실모델 병렬 검증 — 일반=gemini·Hermes·cdx / 민감=Hermes·qwen3 로컬 2계열' },
     { title: 'Adjudicate', detail: '불일치 교차판정' },
   ],
 }
@@ -13,25 +13,36 @@ const _args = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
 const content = _args.content ?? "검증 대상 없음"
 const context = _args.context ?? ""
 const limit = _args.limit ?? 5  // 슬라이딩: 최근 N개 findings만 다음 스테이지로 전달
+// ── 민감도 게이트 (2026-09-01 도입, 2026-09-04 전면화) ─────────────────
+// 이 상수가 외부로 나가는 모든 슬롯을 지배한다. 아래 어떤 옵트인보다 먼저 선언한다.
+//
+// 2026-09-04 수리 이력 — 종전에는 sensitive가 cdx 슬롯 하나만 제외했다. gemini 슬롯은
+// 그대로 살아서 generativelanguage.googleapis.com 으로 나갔다. 즉 민감·수출통제 내용이
+// 구글 클라우드로 전송되는 경로가 열려 있었다. agy·cdx 스킬에는 민감 투입금지 게이트가
+// 명시돼 있는데 gemini-review 스킬에는 없어서 비대칭도 방치돼 있었다.
+// 이제 sensitive는 외부 슬롯을 전부 끈다 — gemini·cdx·agy·nvidia·openrouter.
+//
+// 남는 것은 로컬 2슬롯이다. Hermes(gemma4-hermes)는 Google Gemma 파생이라 gemini와
+// 계보가 겹치므로, 계보가 다른 qwen3(Qwen)을 제2 로컬 슬롯으로 세워 탈상관을 유지한다.
+const sensitive = _args.sensitive === true || _args.defense === true
+
 // ⚠️ OpenRouter 무료모델 = 프로바이더 학습활용 → 사내기밀·민감 데이터 금지.
 // gemini 실패(429/타임아웃) 시에만, 명시 옵트인일 때만 폴백. 기본 OFF(기밀데이터 보호).
-const allowOR = _args.allow_openrouter === true
+// sensitive면 옵트인해도 강제 차단 — 민감 게이트가 옵트인보다 우선한다.
+const allowOR = _args.allow_openrouter === true && !sensitive
 // NVIDIA NIM(build.nvidia.com) 3번째 이종슬롯. 무료티어=프로바이더 데이터활용 가능 →
 // 사내기밀·민감 데이터 금지, 기본 OFF. 켜면 gemini+Hermes+cdx에 nvidia가 더해져 4슬롯.
-const allowNvidia = _args.allow_nvidia === true
+const allowNvidia = _args.allow_nvidia === true && !sensitive
 // agy CLI(Gemini 3.1 Pro High) 이종슬롯 — Google 계열. cdx(OpenAI)·Hermes(로컬)와는 탈상관이나 gemini 슬롯과는 동계보.
 // 키링 OAuth 선행(대화형 agy 1회 로그인) 필요. 구글 백엔드·구독티어 학습정책 미확인 →
 // 사내기밀·민감 데이터 금지, 기본 OFF(옵트인). ⚠️ agy를 켜도 계열 수는 안 는다(gemini와 같은 Google) — 슬롯 수만 늘고 탈상관은 그대로.
-const allowAgy = _args.allow_agy === true
-// ── 민감도 게이트 (2026-09-01) ─────────────────────────────
-// cdx는 외부 구독 백엔드고 학습정책 미확인 → 민감·수출통제·사내기밀 내용은 태우면 안 된다.
-// 기본 슬롯으로 승격하면서 옵트인 게이트가 사라지므로, 대신 opt-OUT 게이트를 둔다.
-// 호출측이 sensitive:true 또는 defense:true를 주면 cdx 슬롯을 통째로 제외한다.
-// 그래도 gemini+Hermes 2슬롯이 남아 이종성(>=2)은 성립 — 민감건이라고 검증이 죽지 않는다.
-const sensitive = _args.sensitive === true || _args.defense === true
+const allowAgy = _args.allow_agy === true && !sensitive
 // cdx = Codex CLI(OpenAI GPT) — gemini(Google)·Hermes(로컬 gemma4)와 계열 분리.
 // ~/.codex OAuth 선행. 기본 ON(2026-09-01 groq 사망으로 승격), allow_cdx:false로 끌 수 있다.
 const allowCdx = _args.allow_cdx !== false && !sensitive
+// ── 슬롯1 주체 (일반=gemini / 민감=qwen3 로컬) ──
+// 슬롯 개수는 그대로 2개다. 주체만 갈아끼우므로 아래 인덱스 오프셋 산식은 불변이다.
+const useLocalSlot1 = sensitive
 
 // ── per-slot 타임아웃 래퍼 (JARVIS HuggingGPT 한계 #2 반면교사: 통짜 타임아웃 금지) ──
 // 한 슬롯이 행(hang)걸려도 전체 barrier를 잡지 않게 개별 wall-clock 상한을 건다.
@@ -50,6 +61,7 @@ const capture = (p, h) => { p.then(v => { h.settled = true; h.value = v }, () =>
 const holders = {
   gemini: mkHolder(), nvidia: mkHolder(), agy: mkHolder(),
   cdx: mkHolder(), hermes: mkHolder(), openrouter: mkHolder(),
+  qwen: mkHolder(),  // 민감모드 슬롯1 (로컬 제2계열)
 }
 
 phase('Verify')
@@ -105,24 +117,34 @@ const SCRIPTS = {
   agy:        "~/.claude/skills/groq-review/scripts/agy_review.py",  // Antigravity CLI Gemini 3.1 Pro(키링 OAuth)
   cdx:        "~/.claude/skills/groq-review/scripts/cdx_review.py",  // Codex CLI OpenAI GPT(~/.codex OAuth)
   hermes:     "~/.claude/skills/groq-review/scripts/hermes_review.py",  // 로컬 gemma4-hermes — 2026-09-01 기본 슬롯2로 승격(무료·오프라인·민감데이터 로컬보존)
+  qwen:       "~/.claude/skills/groq-review/scripts/qwen_review.py",  // 로컬 qwen3:8b — 2026-09-04 민감모드 슬롯1(Qwen 계보, Hermes의 Gemma 계보와 분리)
 }
 
 // gemini(Google)·Hermes(로컬)·cdx(OpenAI) 병렬 실행 = 계열 3분리 탈상관. 슬롯별 타임아웃 차등.
 // nvidia 슬롯은 allow_nvidia 옵트인 시에만 — 무료티어 데이터활용 보호(민감 기본차단).
 const slotThunks = [
-  () => withTimeout(
-    capture(agent(SLOT_PROMPT("Gemini(gemini-2.5-flash)", SCRIPTS.gemini, "/tmp/_pv_gemini.txt"), {
-      label: "gemini-verify", phase: "Verify", schema: VERIFY_SCHEMA,
-      agentType: "general-purpose", effort: "high"
-    }), holders.gemini),
-    420_000, "gemini"  // 실측 326.1s(wf_10061afb 초과사고) → 300s서 상향. 상한=barrier 대기·폴백판단 기준일 뿐, 늦은 결과는 홀더 회수
-  ).catch(() => null),
+  // 슬롯1 — 일반은 gemini(외부), 민감은 qwen3(로컬). 개수는 항상 1개다.
+  useLocalSlot1
+    ? () => withTimeout(
+        capture(agent(SLOT_PROMPT("로컬 qwen3:8b(Qwen 계보)", SCRIPTS.qwen, "/tmp/_pv_qwen.txt"), {
+          label: "qwen-verify", phase: "Verify", schema: VERIFY_SCHEMA,
+          agentType: "general-purpose", effort: "high"
+        }), holders.qwen),
+        900_000, "qwen"  // 로컬 2슬롯은 llm_lock으로 직렬화된다(ollama 단일창구 경합 회피) → Hermes 점유시간만큼 대기가 얹힌다
+      ).catch(() => null)
+    : () => withTimeout(
+        capture(agent(SLOT_PROMPT("Gemini(gemini-2.5-flash)", SCRIPTS.gemini, "/tmp/_pv_gemini.txt"), {
+          label: "gemini-verify", phase: "Verify", schema: VERIFY_SCHEMA,
+          agentType: "general-purpose", effort: "high"
+        }), holders.gemini),
+        420_000, "gemini"  // 실측 326.1s(wf_10061afb 초과사고) → 300s서 상향. 상한=barrier 대기·폴백판단 기준일 뿐, 늦은 결과는 홀더 회수
+      ).catch(() => null),
   () => withTimeout(
     capture(agent(SLOT_PROMPT("로컬 Hermes(gemma4-hermes)", SCRIPTS.hermes, "/tmp/_pv_hermes.txt"), {
       label: "hermes-verify", phase: "Verify", schema: VERIFY_SCHEMA,
       agentType: "general-purpose", effort: "high"
     }), holders.hermes),
-    480_000, "hermes"  // 실측 268.7s(2026-09-01 콜드로드 포함) + 여유. groq(사망, 404 model_not_found) 자리 승계
+    900_000, "hermes"  // 실측 268.7s(2026-09-01 콜드로드 포함). 2026-09-04 480s→900s: 민감모드에서 qwen과 llm_lock으로 직렬화되어 대기가 얹힌다
   ).catch(() => null),
 ]
 if (allowNvidia) {
@@ -161,6 +183,10 @@ if (allowCdx) {
 const slotResults = await parallel(slotThunks)
 // 인덱스 배선(push 순서=gemini,hermes,[nvidia],[agy],[cdx]). 2026-09-01 groq→hermes 승계로 [1]만 주체 교체,
 // 오프셋 산식은 불변(기본 슬롯 수 2 유지). 슬롯 추가/삭제 시 아래 오프셋도 반드시 같이 고칠 것.
+// 슬롯1 주체가 민감모드에서 qwen으로 바뀌므로 홀더·라벨도 같이 따라간다.
+// (홀더를 gemini에 고정하면 아래 gemini_late 회수 로직이 qwen 결과를 gemini로 오보고한다.)
+const slot1Holder = useLocalSlot1 ? holders.qwen : holders.gemini
+const slot1Name   = useLocalSlot1 ? "qwen(local)" : "gemini"
 const racedGem    = slotResults[0]
 const racedHermes = slotResults[1]
 const racedNvidia = allowNvidia ? slotResults[2] : null
@@ -175,7 +201,7 @@ const recover = (name, raced, h) => {
   if (h.settled && h.value) { lateRecovered.push(name); return h.value }
   return null
 }
-let gemResult    = recover("gemini", racedGem, holders.gemini)
+let gemResult    = recover(slot1Name, racedGem, slot1Holder)
 let hermesResult = recover("hermes", racedHermes, holders.hermes)
 let nvidiaResult = allowNvidia ? recover("nvidia", racedNvidia, holders.nvidia) : null
 let agyResult    = allowAgy ? recover("agy", racedAgy, holders.agy) : null
@@ -188,10 +214,14 @@ let extraAttempts = 0  // 폴백 실스폰 수 — 이종성 분모(attempted) �
 // 그건 탈상관 없는 가짜 교차확인이다. gemini가 죽으면 슬롯1은 비우고 Hermes+cdx로 이종성을 채운다.
 // 남은 폴백은 OpenRouter(외부·옵트인 필수)뿐. 미옵트인이면 슬롯1 공백을 그대로 노출한다.
 let slot1 = gemResult
-let slot1src = "gemini"
+let slot1src = slot1Name
 let orNote = null
 const gemFailed = !gemResult || gemResult.script_ok === false
-if (gemFailed) {
+// 민감모드에서는 슬롯1이 로컬 qwen이고 폴백 후보(OpenRouter)는 외부라 애초에 쓸 수 없다.
+// 슬롯1이 죽으면 Hermes 단독이 되고, 그건 아래 이종성 미달 경로가 잡아 PASS를 WARN으로 내린다.
+if (gemFailed && useLocalSlot1) {
+  orNote = "로컬 슬롯1(qwen3) 실패 — 민감모드라 외부 폴백을 쓰지 않는다. 남은 건 Hermes 단독이라 교차확인 불성립. ollama 상태를 확인하고 재실행하라."
+} else if (gemFailed) {
   if (allowOR) {
     // OpenRouter 폴백(옵트인 전용) — Hermes는 이미 슬롯2라 폴백 재사용 금지(동일모델 중복계수 방지).
     extraAttempts += 1
@@ -213,12 +243,13 @@ phase('Adjudicate')
 
 // 회수 2차(폴백 이후): 폴백 대기(최대 300s+120s) 동안 실도착한 잔여 슬롯 복원.
 // wf_10061afb 재현 기준 gemini(326.1s, 폴백 스폰 26s 뒤 도착)가 여기서 살아난다.
+if (!slot1) { const late = recover(slot1Name, null, slot1Holder); if (late) { slot1 = late; gemResult = late } }
 if (!hermesResult) hermesResult = recover("hermes", null, holders.hermes)
 if (allowNvidia && !nvidiaResult) nvidiaResult = recover("nvidia", null, holders.nvidia)
 if (allowAgy && !agyResult) agyResult = recover("agy", null, holders.agy)
 if (allowCdx && !cdxResult) cdxResult = recover("cdx", null, holders.cdx)
 // slot1이 여전히 공백이면 폴백 자체의 지연도착도 회수(hermes 타임아웃 후 OpenRouter 대기 중 도착 등)
-if (gemFailed && (!slot1 || slot1.script_ok === false)) {
+if (gemFailed && !useLocalSlot1 && (!slot1 || slot1.script_ok === false)) {
   for (const [nm, h] of [["openrouter", holders.openrouter]]) {  // hermes 제외 — 슬롯2 전용 홀더
     if (h.settled && h.value && h.value.script_ok !== false) {
       slot1 = h.value; slot1src = nm; lateRecovered.push(nm)
@@ -230,7 +261,7 @@ if (gemFailed && (!slot1 || slot1.script_ok === false)) {
 // gemini가 폴백 대체 이후 실도착한 경우: slot1(폴백)은 유지하되 gemini 실결과를 별도 슬롯으로 합산 포함.
 // 실재 결과 드랍 금지(wf_10061afb 결함의 본체).
 let geminiLate = null
-if (gemFailed && slot1src !== "gemini" && holders.gemini.settled
+if (gemFailed && !useLocalSlot1 && slot1src !== "gemini" && holders.gemini.settled
     && holders.gemini.value && holders.gemini.value.script_ok !== false) {
   geminiLate = holders.gemini.value
   lateRecovered.push("gemini(폴백 후 도착)")
@@ -298,8 +329,9 @@ let degradeNote = null
 if (!crossVerified) {
   degradeNote = `⚠️ 이종검증 미달성 — 실모델 ${hetero}/${attempted}만 성공(교차확인 불성립). ` +
     (hetero === 1 ? "단일모델 결과라 탈상관 없음. " : "전 슬롯 실패. ") +
-    (gemFailed ? "gemini 슬롯 실패(429/503/타임아웃 추정). " : "") +
-    (gemFailed && !allowOR ? "OpenRouter 폴백 미옵트인. " : "")
+    (gemFailed ? `슬롯1(${slot1Name}) 실패. ` : "") +
+    (gemFailed && useLocalSlot1 ? "민감모드라 외부 폴백 없음 — ollama 상태 확인 필요. " : "") +
+    (gemFailed && !useLocalSlot1 && !allowOR ? "OpenRouter 폴백 미옵트인. " : "")
   // 단일모델 PASS는 교차확인 없이 통과선언 불가 → WARN 강등(FAIL/WARN은 유지, 놓침 방지)
   if (finalVerdict === "PASS") {
     finalVerdict = "WARN"
@@ -312,7 +344,9 @@ return {
   cross_verified: crossVerified,  // false면 이종검증 미달성 — verdict를 교차확인 결과로 신뢰 금지
   ...(degradeNote ? { degrade_warning: degradeNote } : {}),
   heterogeneity: `${hetero}/${attempted} 실모델 검증 성공`,  // 시도 대비 실제 탈상관 달성
-  slot1_source: slot1src,  // "gemini" 또는 "openrouter"(폴백 발동 시)
+  slot1_source: slot1src,  // "gemini" | "qwen(local)"(민감모드) | "openrouter"(폴백 발동 시)
+  sensitive_mode: sensitive,  // true면 외부 슬롯 전량 차단 — 데이터가 기기 밖으로 안 나갔다는 표시
+  ...(sensitive ? { egress: "none — 로컬 2계열(Hermes/gemma4 + qwen3/Qwen)로만 검증" } : {}),
   ...(orNote ? { fallback_note: orNote } : {}),
   slot1:  { source: slot1src, ...(slotReport(slot1) ?? { script_ok: false }) },
   hermes: slotReport(hermesResult),

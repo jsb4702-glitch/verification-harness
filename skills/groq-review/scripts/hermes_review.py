@@ -11,6 +11,24 @@ import os
 import subprocess
 
 HERMES_BIN = os.path.expanduser("~/.local/bin/hermes")
+LLM_LOCK = os.path.expanduser("~/.claude/tools/llm-lock/llm_lock.py")
+
+
+def reexec_under_lock():
+    """락 미보유면 llm_lock 래퍼를 거쳐 자신을 재실행한다(중복 진입 방지).
+
+    2026-09-04 추가 — 민감모드가 Hermes + qwen 로컬 2슬롯을 동시에 띄우게 되면서
+    ollama 단일 창구 경합이 생긴다(24GB에 9.6+5.2GB). 07-22 실측 경합 180초+ 대
+    단독 6초. qwen_review.py와 같은 락을 공유해 직렬화한다.
+    """
+    if os.environ.get("LLM_LOCK_HELD") == "1":
+        return
+    if not os.path.exists(LLM_LOCK):
+        return  # 락 도구가 없으면 그냥 진행(가용성 우선)
+    cmd = [sys.executable, LLM_LOCK, "--name", "pv-hermes", "--",
+           sys.executable, os.path.abspath(__file__)] + sys.argv[1:]
+    sys.exit(subprocess.run(cmd).returncode)
+
 TIMEOUT = int(os.environ.get("HERMES_TIMEOUT", "420"))  # 실측 268.7s(2026-09-01, 9.6GB 콜드로드 포함) + 여유. 240s는 상시 미달이라 상향
 
 SYSTEM_PROMPT = """너는 독립 교차검증 엔지니어다. 아래 [검토대상]을 옳다고 가정하지 말고 처음부터 다시 따져라. 다음을 점검:
@@ -25,6 +43,8 @@ SYSTEM_PROMPT = """너는 독립 교차검증 엔지니어다. 아래 [검토대
 
 
 def main():
+    reexec_under_lock()
+
     if not os.path.exists(HERMES_BIN):
         print(f"ERROR: hermes 실행파일 없음: {HERMES_BIN}")
         sys.exit(1)

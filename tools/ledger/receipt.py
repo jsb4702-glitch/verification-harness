@@ -174,8 +174,12 @@ def cmd_run(a):
     logpath = os.path.join(LOGDIR, f"{safe}-{int(time.time() * 1000)}.log")
 
     try:
+        # errors="replace" 필수. 감싸는 명령이 깨진 바이트를 뱉으면(셸이 멀티바이트 변수명을
+        # 오파싱해 낸 에러 메시지 등) strict 디코딩은 UnicodeDecodeError 로 죽고,
+        # 실행은 끝났는데 receipt 가 발급되지 않아 실행 확인 자체가 불가능해진다.
+        # 타임아웃 경로엔 이미 같은 방어가 있었다 — 정상 경로만 빠져 있었다(2026-09-04 실측).
         proc = subprocess.run(argv, capture_output=True, text=True,
-                              timeout=(a.timeout or None))
+                              errors="replace", timeout=(a.timeout or None))
         out, err, code = proc.stdout, proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as e:
         def _dec(x):
